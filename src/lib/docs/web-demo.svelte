@@ -117,7 +117,10 @@
 		font: 400 0.82rem/1.55 var(--font-code);
 		font-variant-ligatures: contextual;
 		font-feature-settings: 'calt' 1, 'liga' 1;
-		field-sizing: content;
+		field-sizing: fixed;
+		max-width: 100%;
+		min-width: 0;
+		overflow: auto;
 	}
 	textarea:focus {
 		outline: 2px solid var(--ring);

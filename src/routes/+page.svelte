@@ -1319,7 +1319,7 @@
 		<Dialog.Content class="docs-popup">
 			<Dialog.Title class="sr-only">Doku</Dialog.Title>
 			<Dialog.Description class="sr-only">Erklärungen zu den Dateitypen.</Dialog.Description>
-			<DocsBrowser fill />
+			<DocsBrowser fill language={codeLanguage(editorName)} />
 		</Dialog.Content>
 	</Dialog.Root>
 	<Dialog.Root bind:open={versionsOpen}>

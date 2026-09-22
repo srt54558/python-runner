@@ -146,7 +146,7 @@ test('opens the docs routes as a popup on the editor', async ({ page }) => {
 		const docs = page.getByRole('dialog', { name: 'Doku' });
 		await expect(docs).toBeVisible();
 		await expect(page).toHaveURL(/\/$/u);
-		await expect(docs.getByRole('heading', { level: 1, name: 'Doku' })).toBeVisible();
+		await expect(docs.getByRole('heading', { level: 1, name: 'Python' })).toBeVisible();
 		await page.keyboard.press('Escape');
 		await expect(docs).toBeHidden();
 	}
@@ -158,13 +158,10 @@ test('names the product K+ Coder and checks new file names', async ({ page }) =>
 	const docs = page.getByRole('dialog', { name: 'Doku' });
 	await expect(docs).toBeVisible();
 	await expect(page).not.toHaveURL(/\/docs/u);
-	for (const name of ['HTML', 'CSS', 'JavaScript', 'JSON', 'XML', 'Markdown', 'Text', 'Python']) {
-		await expect(docs.getByRole('button', { name, exact: true })).toBeVisible();
-	}
-	await docs.getByRole('button', { name: 'CSS', exact: true }).click();
-	await expect(page).not.toHaveURL(/\/docs/u);
-	await expect(docs.getByRole('heading', { name: 'CSS-Datei' })).toBeVisible();
-	await docs.getByRole('navigation', { name: 'Inhalt' }).getByRole('button', { name: 'Farbe' }).click();
+	await expect(docs.getByRole('heading', { level: 1, name: 'Python' })).toBeVisible();
+	await expect(docs.getByRole('heading', { name: 'Ausgabe' })).toBeVisible();
+	await expect(docs.getByRole('button', { name: 'Themen' })).toHaveCount(0);
+	await docs.getByRole('navigation', { name: 'Inhalt' }).getByRole('button', { name: 'Kommentare' }).click();
 	await expect(page).toHaveURL(/\/$/u);
 	await page.keyboard.press('Escape');
 	await expect(docs).toBeHidden();
@@ -334,26 +331,46 @@ test('runs a javascript file on its own', async ({ page }) => {
 
 test('explains each file type in the docs', async ({ page }) => {
 	await openCoder(page);
+	await createFile(page, 'seite.html');
+	await createFile(page, 'style.css');
+	await createFile(page, 'app.js');
+	await createFile(page, 'daten.json');
+	await createFile(page, 'note.xml');
+	await createFile(page, 'note.md');
+	await createFile(page, 'notiz.txt');
+
+	const cases = [
+		{ file: 'main.py', title: 'Python', lesson: 'Ausgabe' },
+		{ file: 'seite.html', title: 'HTML', lesson: 'Gerüst' },
+		{ file: 'style.css', title: 'CSS', lesson: 'CSS-Datei' },
+		{ file: 'app.js', title: 'JavaScript', lesson: 'JavaScript-Datei' },
+		{ file: 'daten.json', title: 'JSON', lesson: 'Objekt' },
+		{ file: 'note.xml', title: 'XML', lesson: 'Element' },
+		{ file: 'note.md', title: 'Markdown', lesson: 'Überschrift' },
+		{ file: 'notiz.txt', title: 'Text', lesson: 'Nur Text' }
+	];
+	for (const item of cases) {
+		await page.getByRole('tab', { name: item.file }).click();
+		await page.getByRole('button', { name: 'Doku' }).click();
+		const docs = page.getByRole('dialog', { name: 'Doku' });
+		await expect(docs.getByRole('heading', { level: 1, name: item.title })).toBeVisible();
+		await expect(docs.getByRole('heading', { name: item.lesson, exact: true })).toBeVisible();
+		await expect(docs.getByText('Wähle ein Thema.')).toHaveCount(0);
+		await page.keyboard.press('Escape');
+		await expect(docs).toBeHidden();
+	}
+
+	await page.getByRole('tab', { name: 'daten.json' }).click();
 	await page.getByRole('button', { name: 'Doku' }).click();
 	const docs = page.getByRole('dialog', { name: 'Doku' });
-	await docs.getByRole('button', { name: 'CSS', exact: true }).click();
-	await expect(docs.getByRole('heading', { name: 'CSS-Datei' })).toBeVisible();
-	await docs.getByRole('button', { name: 'Themen' }).click();
-	await docs.getByRole('button', { name: 'JavaScript', exact: true }).click();
-	await expect(docs.getByRole('heading', { name: 'JavaScript-Datei' })).toBeVisible();
-	await docs.getByRole('button', { name: 'Themen' }).click();
-	await docs.getByRole('button', { name: 'JSON', exact: true }).click();
-	await expect(docs.getByRole('heading', { name: 'Objekt' })).toBeVisible();
 	await expect(docs.frameLocator('#json-objekt iframe').getByText('"name": "Ada"')).toBeVisible();
-	await docs.getByRole('button', { name: 'Themen' }).click();
-	await docs.getByRole('button', { name: 'XML', exact: true }).click();
-	await expect(docs.getByRole('heading', { name: 'Element' })).toBeVisible();
-	await docs.getByRole('button', { name: 'Themen' }).click();
-	await docs.getByRole('button', { name: 'Markdown', exact: true }).click();
-	await expect(docs.getByRole('heading', { name: 'Überschrift', exact: true })).toBeVisible();
+	await page.keyboard.press('Escape');
+	await page.getByRole('tab', { name: 'note.md' }).click();
+	await page.getByRole('button', { name: 'Doku' }).click();
 	await expect(docs.frameLocator('#md-ueberschrift iframe').getByRole('heading', { name: 'Tagebuch' })).toBeVisible();
-	await docs.getByRole('button', { name: 'Themen' }).click();
-	await docs.getByRole('button', { name: 'Text', exact: true }).click();
+	await page.keyboard.press('Escape');
+	await page.getByRole('tab', { name: 'notiz.txt' }).click();
+	await page.getByRole('button', { name: 'Doku' }).click();
 	await expect(docs.frameLocator('#txt-nur iframe').getByText('... es ist nur text :D')).toBeVisible();
 	await docs.getByRole('navigation', { name: 'Inhalt' }).getByRole('button', { name: 'Nur Text' }).click();
 	await expect(page).not.toHaveURL(/\/docs|#/u);

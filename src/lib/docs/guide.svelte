@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import Menu from '@lucide/svelte/icons/menu';
 	import X from '@lucide/svelte/icons/x';
 	import { lessonMatches, type Lesson } from './lessons';
@@ -10,14 +9,12 @@
 		lead,
 		lessons,
 		example,
-		onback,
 		embedded = false
 	}: {
 		title: string;
 		lead: string;
 		lessons: Lesson[];
 		example: Snippet<[Lesson]>;
-		onback: () => void;
 		embedded?: boolean;
 	} = $props();
 
@@ -58,7 +55,6 @@
 	{/if}
 	<div class="toolbar">
 		<div class="toolbar-inner">
-			<button type="button" class="icon-btn" aria-label="Themen" onclick={onback}><ChevronLeft /></button>
 			<label>
 				<span class="sr">Suche</span>
 				<input type="search" placeholder="Suchen" bind:value={query} autocomplete="off" />
@@ -77,20 +73,20 @@
 					<Menu />
 				{/if}
 			</button>
-			{#if menuOpen}
-				<nav
-					id="docs-inhalt"
-					class="menu"
-					aria-label="Inhalt"
-					tabindex="-1"
-					{@attach focusMenu}
-				>
-					{@render contents()}
-				</nav>
-			{/if}
 		</div>
 	</div>
 	<div class="layout">
+		{#if menuOpen}
+			<nav
+				id="docs-inhalt"
+				class="menu"
+				aria-label="Inhalt"
+				tabindex="-1"
+				{@attach focusMenu}
+			>
+				{@render contents()}
+			</nav>
+		{/if}
 		<nav class="sidebar" aria-label="Inhalt">
 			{@render contents()}
 		</nav>
@@ -238,17 +234,13 @@
 	}
 	.menu {
 		position: absolute;
-		top: calc(100% + 0.35rem);
-		right: var(--docs-gutter);
-		left: var(--docs-gutter);
 		z-index: 6;
-		max-height: min(70dvh, 28rem);
+		inset: 0;
 		overflow: auto;
-		padding: 0.75rem 0.85rem 0.9rem;
-		border: 1px solid var(--border);
-		border-radius: 0.45rem;
+		overscroll-behavior: contain;
+		padding: 0.75rem 0.85rem 1rem;
+		border-top: 1px solid var(--border);
 		background: var(--background);
-		box-shadow: 0 12px 32px color-mix(in oklch, var(--foreground) 14%, transparent);
 	}
 	.sr {
 		position: absolute;
@@ -258,6 +250,7 @@
 		clip: rect(0 0 0 0);
 	}
 	.layout {
+		position: relative;
 		display: grid;
 		grid-template-columns: 13.5rem minmax(0, 1fr);
 		align-items: start;
@@ -389,13 +382,14 @@
 	}
 	.docs.embedded .intro {
 		flex: none;
+		padding-right: 3.25rem;
 	}
 	.docs.embedded .toolbar {
 		position: static;
 		flex: none;
 	}
 	.docs.embedded .toolbar-inner {
-		padding-right: 3.25rem;
+		padding-right: var(--docs-gutter);
 	}
 	.docs.embedded .layout {
 		flex: 1 1 auto;
