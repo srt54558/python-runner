@@ -1,12 +1,14 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import Coffee from '@lucide/svelte/icons/coffee';
 	import Download from '@lucide/svelte/icons/download';
 	import Files from '@lucide/svelte/icons/files';
 	import Flower2 from '@lucide/svelte/icons/flower-2';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import Info from '@lucide/svelte/icons/info';
 	import Moon from '@lucide/svelte/icons/moon';
 	import Play from '@lucide/svelte/icons/play';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -20,8 +22,13 @@
 	import Undo2 from '@lucide/svelte/icons/undo-2';
 	import X from '@lucide/svelte/icons/x';
 	import FilesExplorer from '$lib/components/files-explorer.svelte';
+	import NewFileDialog from '$lib/components/new-file-dialog.svelte';
+	import WelcomeDialog from '$lib/components/welcome-dialog.svelte';
 	import CodeEditor from '$lib/components/code-editor.svelte';
+	import DocsBrowser from '$lib/docs/docs-browser.svelte';
+	import { takeDocsPopup } from '$lib/docs/popup';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as ButtonGroup from '$lib/components/ui/button-group/index.js';
@@ -34,6 +41,20 @@
 		RunnerStatus
 	} from '$lib/runner/protocol';
 	import { lineExcerpt } from '$lib/editor/explain';
+	import { renderDocumentPreview } from '$lib/editor/document-preview';
+	import {
+		editorLineForPreview,
+		previewDocument,
+		previewFileFromUrl,
+		readPreviewDone,
+		readPreviewMessage,
+		readPreviewRequest,
+		scriptDocument,
+		scriptLineOffset
+	} from '$lib/editor/preview';
+	import { lintWeb } from '$lib/editor/web-lint';
+	import { dependencyVersions } from 'virtual:dependency-versions';
+	import { resolveProjectPath } from '$lib/editor/links';
 	import { consoleSegments, matchProblem } from '$lib/runner/console-links';
 	import { canShareCode, createShareUrl, decodeCode, IMPORT_PARAM } from '$lib/runner/share';
 	import { WORKSPACE_ARCHIVE_NAME, workspaceExport } from '$lib/workspace/archive';
@@ -41,18 +62,27 @@
 	import {
 		closeFile,
 		contentSignature,
+		applyWelcomeChoice,
 		createFile,
 		createInitialWorkspace,
+		codeLanguage,
+		fileMime,
 		hasUnsavedChanges,
 		importFiles,
+		isHtmlFile,
+		isPythonFile,
 		LEGACY_STORAGE_KEY,
 		openFile,
+		projectDirectory,
+		projectFilePath,
+		projectFiles,
 		selectFolder,
 		updateFileContent,
+		type WelcomeLanguage,
 		type WorkspaceFile,
 		type WorkspaceSnapshot
 	} from '$lib/workspace/model';
-	import { applyDocumentTheme, parseTheme, type AppTheme } from '$lib/theme';
+	import { applyDocumentTheme, isDarkTheme, parseTheme, type AppTheme } from '$lib/theme';
 
 	const RUN_TIMEOUT_MS = 15_000;
 	const SAVE_DELAY_MS = 250;
@@ -64,8 +94,9 @@
 	let savedContents = $state<Record<string, string>>({});
 	type ConsoleBlock = {
 		id: number;
+		fileId: string;
 		runId: number | null;
-		kind: 'note' | 'run';
+		kind: 'note' | 'run' | 'preview';
 		title: string;
 		filename: string;
 		stdout: string;
@@ -73,6 +104,8 @@
 		status: string;
 		finishedAt: string;
 		failed: boolean;
+		line: number | null;
+		column: number | null;
 	};
 
 	function clockTime(date = new Date()) {
@@ -84,6 +117,8 @@
 	let consoleBlocks = $state<ConsoleBlock[]>([]);
 	let runnerStatus = $state<RunnerStatus>('loading');
 	let pythonVersion = $state<string>();
+	let versionsOpen = $state(false);
+	let docsOpen = $state(false);
 	let diagnostics = $state<RuffDiagnostic[]>([]);
 	let lintError = $state<string>();
 	let notice = $state('');
@@ -96,6 +131,18 @@
 	let saveChooser = $state(false);
 	let pane = $state<'code' | 'problems'>('code');
 	let terminalCollapsed = $state(false);
+	let previewConsoleOpen = $state(false);
+	let previewDoc = $state('');
+	let previewNonce = $state(0);
+	let previewToken = 0;
+	let scriptDoc = $state('');
+	let scriptRunning = $state(false);
+	let scriptToken = 0;
+	let scriptFileId = '';
+	let scriptName = '';
+	let scriptLineOffsetLines = 0;
+	let scriptLogged = false;
+	let scriptTimer: ReturnType<typeof setTimeout> | undefined;
 	let narrow = $state(false);
 	let consoleViewport = $state<HTMLElement | null>(null);
 	let canUndo = $state(false);
@@ -118,8 +165,19 @@
 	let saveTicket = 0;
 	let saveQueue: Promise<unknown> = Promise.resolve();
 	let saveErrorAnnounced = false;
-	let pendingRun: { id: number; code: string; filename: string } | undefined;
+	let pendingRun:
+		| {
+				id: number;
+				code: string;
+				filename: string;
+				fileId: string;
+				files: { path: string; content: string }[];
+		  }
+		| undefined;
+	let runFileId = '';
 	let lintedFileId = '';
+	let previewFileId = $state('');
+	let createOpen = $state(false);
 
 	const activeFile = $derived(
 		workspace.files.find((file) => file.id === workspace.activeFileId) ?? workspace.files[0]
@@ -128,12 +186,27 @@
 	const editorCode = $derived(viewingShare && sharedCode !== null ? sharedCode : fileCode);
 	const editorFileId = $derived(viewingShare ? SHARED_PREVIEW_ID : (activeFile?.id ?? ''));
 	const editorName = $derived(viewingShare ? 'geteilt.py' : (activeFile?.name ?? 'main.py'));
+	const isHtml = $derived(isHtmlFile(editorName));
+	const isMarkdown = $derived(codeLanguage(editorName) === 'markdown');
+	const isJavaScript = $derived(codeLanguage(editorName) === 'javascript');
+	const isPython = $derived(isPythonFile(editorName));
+	const showsPreview = $derived(isHtml || isMarkdown);
+	const showsOutput = $derived(isPython || isJavaScript);
+	const showsPane = $derived(showsPreview || showsOutput);
+	const previewTarget = $derived.by(() => {
+		if (!showsPreview) return null;
+		return workspace.files.find((item) => item.id === editorFileId) ?? null;
+	});
+	const previewing = $derived(previewTarget !== null);
 	const openFiles = $derived(
 		workspace.openFileIds
 			.map((id) => workspace.files.find((file) => file.id === id))
 			.filter((file): file is WorkspaceFile => Boolean(file))
 	);
+	const consoleFileId = $derived(previewTarget?.id ?? editorFileId);
+	const fileConsole = $derived(consoleBlocks.filter((block) => block.fileId === consoleFileId));
 	const isRunning = $derived(runnerStatus === 'running');
+	const stopping = $derived((isJavaScript && scriptRunning) || (!showsPreview && isRunning));
 	const dirty = $derived(hydrated && hasUnsavedChanges(workspace, savedSignature));
 	const dirtyFileIds = $derived(
 		new Set(
@@ -142,12 +215,13 @@
 				.map((file) => file.id)
 		)
 	);
-	const statusLabel = $derived.by(() => {
-		if (runnerStatus === 'loading') return 'Python wird geladen';
-		if (runnerStatus === 'running') return 'Wird ausgeführt';
-		if (runnerStatus === 'error') return 'Python nicht verfügbar';
-		return pythonVersion ? `Python ${pythonVersion}` : 'Python bereit';
+	const pythonStatus = $derived.by(() => {
+		if (runnerStatus === 'loading') return 'wird geladen';
+		if (runnerStatus === 'error') return 'nicht verfügbar';
+		return pythonVersion ?? 'bereit';
 	});
+	const runtimePackages = dependencyVersions.filter((item) => !item.dev);
+	const toolPackages = dependencyVersions.filter((item) => item.dev);
 
 	function announce(message: string) {
 		notice = message;
@@ -155,13 +229,14 @@
 		noticeTimer = setTimeout(() => (notice = ''), 3_000);
 	}
 
-	function pushNote(block: string, failed = false) {
+	function pushNote(block: string, failed = false, fileId = runFileId || editorFileId) {
 		const text = block.replace(/\s+$/u, '');
-		if (!text) return;
+		if (!text || !fileId) return;
 		consoleBlocks = [
 			...consoleBlocks,
 			{
 				id: ++consoleSeq,
+				fileId,
 				runId: null,
 				kind: 'note',
 				title: text,
@@ -170,17 +245,20 @@
 				stderr: '',
 				status: '',
 				finishedAt: '',
-				failed
+				failed,
+				line: null,
+				column: null
 			}
 		];
 		scrollConsoleToEnd();
 	}
 
-	function beginRun(id: number, filename: string) {
+	function beginRun(id: number, filename: string, fileId: string) {
 		consoleBlocks = [
 			...consoleBlocks,
 			{
 				id: ++consoleSeq,
+				fileId,
 				runId: id,
 				kind: 'run',
 				title: `$ python3 ${filename}`,
@@ -189,7 +267,9 @@
 				stderr: '',
 				status: '',
 				finishedAt: '',
-				failed: false
+				failed: false,
+				line: null,
+				column: null
 			}
 		];
 		scrollConsoleToEnd();
@@ -225,7 +305,8 @@
 	}
 
 	function clearConsole() {
-		consoleBlocks = [];
+		const fileId = consoleFileId;
+		consoleBlocks = consoleBlocks.filter((block) => block.fileId !== fileId);
 	}
 
 	function dismissConsole(id: number) {
@@ -314,15 +395,62 @@
 		applyWorkspace(closeFile(workspace, fileId));
 	}
 
-	function addFile() {
+	function createNamedFile(name: string) {
 		const folderId = activeFile?.folderId;
 		if (!folderId) return;
-		applyWorkspace(createFile(workspace, folderId, 'datei'));
+		applyWorkspace(createFile(workspace, folderId, name));
 		pane = 'code';
+		if (isHtmlFile(name) || codeLanguage(name) === 'markdown') previewConsoleOpen = false;
+		void tick().then(() => codeEditor?.focusEditor());
+	}
+
+	function linkedProjectFiles() {
+		const files = projectFiles(workspace);
+		if (!activeFile || viewingShare) return files;
+		const activePath = projectFilePath(workspace, activeFile);
+		return files.map((file) =>
+			file.path === activePath ? { path: file.path, content: editorCode } : file
+		);
+	}
+
+	function runPayload() {
+		if (viewingShare || !activeFile) {
+			return {
+				filename: editorName,
+				files: [{ path: editorName, content: editorCode }]
+			};
+		}
+		const filename = projectFilePath(workspace, activeFile);
+		const files = linkedProjectFiles();
+		if (!files.some((file) => file.path === filename)) files.push({ path: filename, content: editorCode });
+		return { filename, files };
 	}
 
 	function toggleProblems() {
 		pane = pane === 'problems' ? 'code' : 'problems';
+	}
+
+	function revealConsoleLine(block: ConsoleBlock) {
+		const where = consoleWhere(block);
+		if (block.line != null && block.filename) {
+			const column = block.column ?? 1;
+			const key = block.filename.toLocaleLowerCase('de');
+			const match = workspace.files.find((file) => {
+				const path = projectFilePath(workspace, file).toLocaleLowerCase('de');
+				return path === key || file.name.toLocaleLowerCase('de') === key;
+			});
+			if (match && match.id !== workspace.activeFileId) {
+				const row = block.line;
+				showFile(match.id);
+				void tick().then(() => codeEditor?.showDiagnostic(row, column, row, column + 1));
+				return;
+			}
+			if (!where) {
+				codeEditor?.showDiagnostic(block.line, column, block.line, column + 1);
+				return;
+			}
+		}
+		if (where) showLinkedProblem(where);
 	}
 
 	function showLinkedProblem(diagnostic: RuffDiagnostic) {
@@ -346,7 +474,17 @@
 			);
 			return diagnostic ? [diagnostic] : [];
 		});
-		return matches.at(-1) ?? null;
+		if (matches.length > 0) return matches.at(-1) ?? null;
+		if (block.line == null) return null;
+		const column = block.column ?? 1;
+		return (
+			matchProblem(diagnostics, block.line, block.column, block.column == null ? null : column + 1) ?? {
+				code: null,
+				message: block.stderr,
+				start_location: { row: block.line, column },
+				end_location: { row: block.line, column: column + 1 }
+			}
+		);
 	}
 
 	function restoredWorkspace() {
@@ -418,16 +556,24 @@
 				if (message.status === 'ready' && pendingRun) {
 					const nextRun = pendingRun;
 					pendingRun = undefined;
-					dispatchRun(worker, nextRun.id, nextRun.code, nextRun.filename);
+					dispatchRun(
+						worker,
+						nextRun.id,
+						nextRun.code,
+						nextRun.filename,
+						nextRun.fileId,
+						nextRun.files
+					);
 				}
 				return;
 			}
 			if (message.type === 'fatal') {
+				const fileId = pendingRun?.fileId || runFileId || editorFileId;
 				pendingRun = undefined;
 				worker.terminate();
 				pythonWorker = undefined;
 				runnerStatus = 'error';
-				pushNote(`Python konnte nicht geladen werden.\n${message.error}`, true);
+				pushNote(`Python konnte nicht geladen werden.\n${message.error}`, true, fileId);
 				return;
 			}
 			if (message.id !== runId) return;
@@ -451,13 +597,15 @@
 		worker.onerror = (event) => {
 			event.preventDefault();
 			if (pythonWorker !== worker) return;
+			const fileId = pendingRun?.fileId || runFileId || editorFileId;
 			pendingRun = undefined;
 			worker.terminate();
 			pythonWorker = undefined;
 			runnerStatus = 'error';
 			pushNote(
 				'Der Python-Prozess wurde unerwartet beendet. Er kann erneut gestartet werden.',
-				true
+				true,
+				fileId
 			);
 		};
 	}
@@ -475,7 +623,7 @@
 				scheduleLint();
 				return;
 			}
-			if (message.id !== lintId) return;
+			if (!isPython || message.id !== lintId) return;
 			if (message.type === 'diagnostics') {
 				diagnostics = message.diagnostics;
 				lintError = undefined;
@@ -486,13 +634,14 @@
 		worker.onerror = (event) => {
 			event.preventDefault();
 			if (ruffWorker !== worker) return;
-			lintError = 'Der Ruff-Worker konnte nicht geladen werden.';
+			if (isPython) lintError = 'Der Ruff-Worker konnte nicht geladen werden.';
 			worker.terminate();
 			ruffWorker = undefined;
 		};
 	}
 
 	function scheduleLint(source = editorCode) {
+		if (!isPython) return;
 		if (lintTimer) clearTimeout(lintTimer);
 		lintTimer = setTimeout(() => {
 			lintId += 1;
@@ -500,7 +649,59 @@
 		}, 180);
 	}
 
+	function stopScript(message: string) {
+		if (scriptTimer) clearTimeout(scriptTimer);
+		scriptDoc = '';
+		scriptToken = 0;
+		const fileId = scriptFileId;
+		const wasRunning = scriptRunning;
+		scriptRunning = false;
+		if (wasRunning && message) pushNote(message, true, fileId);
+	}
+
+	function finishScript() {
+		if (!scriptRunning) return;
+		if (scriptTimer) clearTimeout(scriptTimer);
+		scriptRunning = false;
+		if (!scriptLogged) pushNote('Fertig.', false, scriptFileId);
+	}
+
+	function startScript() {
+		terminalCollapsed = false;
+		scriptFileId = editorFileId;
+		scriptName = editorName;
+		scriptLogged = false;
+		scriptToken = ++previewToken;
+		const links = {
+			baseDir: activeFile ? projectDirectory(workspace, activeFile.folderId) : '',
+			files: linkedProjectFiles()
+		};
+		const doc = scriptDocument(editorCode, scriptToken, links);
+		scriptLineOffsetLines = scriptLineOffset(doc);
+		scriptDoc = doc;
+		scriptRunning = true;
+		if (scriptTimer) clearTimeout(scriptTimer);
+		scriptTimer = setTimeout(
+			() => stopScript(`Ausführung nach ${RUN_TIMEOUT_MS / 1_000} Sekunden gestoppt.`),
+			RUN_TIMEOUT_MS
+		);
+	}
+
 	function runCode() {
+		if (previewing) {
+			terminalCollapsed = false;
+			previewNonce += 1;
+			return;
+		}
+		if (isJavaScript) {
+			if (scriptRunning) {
+				stopScript('Ausführung gestoppt.');
+				return;
+			}
+			startScript();
+			return;
+		}
+		if (!isPython) return;
 		if (isRunning) {
 			stopRun('Ausführung gestoppt.');
 			return;
@@ -508,19 +709,29 @@
 		if (runnerStatus === 'loading') return;
 		terminalCollapsed = false;
 		runId += 1;
-		const filename = editorName;
+		const payload = runPayload();
+		const fileId = editorFileId;
+		runFileId = fileId;
 		if (!pythonWorker || runnerStatus === 'error') {
-			pendingRun = { id: runId, code: editorCode, filename };
+			pendingRun = { id: runId, code: editorCode, fileId, ...payload };
 			startPythonWorker();
 			return;
 		}
-		dispatchRun(pythonWorker, runId, editorCode, filename);
+		dispatchRun(pythonWorker, runId, editorCode, payload.filename, fileId, payload.files);
 	}
 
-	function dispatchRun(worker: Worker, id: number, source: string, filename: string) {
+	function dispatchRun(
+		worker: Worker,
+		id: number,
+		source: string,
+		filename: string,
+		fileId: string,
+		files: { path: string; content: string }[]
+	) {
 		runnerStatus = 'running';
-		beginRun(id, filename);
-		worker.postMessage({ type: 'run', id, code: source, filename });
+		runFileId = fileId;
+		beginRun(id, filename, fileId);
+		worker.postMessage({ type: 'run', id, code: source, filename, files });
 		runTimer = setTimeout(
 			() => stopRun(`Ausführung nach ${RUN_TIMEOUT_MS / 1_000} Sekunden gestoppt.`),
 			RUN_TIMEOUT_MS
@@ -550,7 +761,9 @@
 	function downloadCode() {
 		const filename = editorName;
 		const blobUrl = URL.createObjectURL(
-			new Blob([editorCode], { type: 'text/x-python;charset=utf-8' })
+			new Blob([editorCode], {
+				type: `${fileMime(filename)};charset=utf-8`
+			})
 		);
 		const link = document.createElement('a');
 		link.href = blobUrl;
@@ -590,7 +803,7 @@
 		}
 		try {
 			if (navigator.share) {
-				await navigator.share({ title: activeFile?.name ?? 'Python', url: shareUrl });
+				await navigator.share({ title: activeFile?.name ?? 'K+ Coder', url: shareUrl });
 				announce('Teilen geöffnet');
 			} else {
 				await navigator.clipboard.writeText(shareUrl);
@@ -600,6 +813,12 @@
 			if (error instanceof DOMException && error.name === 'AbortError') return;
 			announce('Der Link konnte nicht geteilt werden.');
 		}
+	}
+
+	function finishWelcome(language: WelcomeLanguage) {
+		workspace = applyWelcomeChoice(workspace, language);
+		pane = 'code';
+		void tick().then(() => codeEditor?.focusEditor());
 	}
 
 	function applyTheme(nextTheme: AppTheme) {
@@ -621,14 +840,38 @@
 	}
 
 	$effect(() => {
+		if (!hydrated || !workspace.welcomed) return;
+		if (takeDocsPopup()) docsOpen = true;
+	});
+
+	$effect(() => {
 		if (!hydrated) return;
 		const source = editorCode;
 		const fileId = editorFileId;
 		if (fileId !== lintedFileId) {
 			lintedFileId = fileId;
 			diagnostics = [];
+			lintError = undefined;
 		}
-		scheduleLint(source);
+		if (isPythonFile(editorName)) {
+			scheduleLint(source);
+			return () => {
+				if (lintTimer) clearTimeout(lintTimer);
+			};
+		}
+		lintId += 1;
+		const ticket = lintId;
+		const name = editorName;
+		lintTimer = setTimeout(() => {
+			if (ticket !== lintId) return;
+			try {
+				diagnostics = lintWeb(name, source);
+				lintError = undefined;
+			} catch (error) {
+				diagnostics = [];
+				lintError = error instanceof Error ? error.message : String(error);
+			}
+		}, 180);
 		return () => {
 			if (lintTimer) clearTimeout(lintTimer);
 		};
@@ -645,6 +888,183 @@
 		};
 	});
 
+	let openedPreviewId = '';
+
+	$effect(() => {
+		if (!hydrated) return;
+		if (isHtml) previewFileId = editorFileId;
+		if (!isJavaScript && scriptDoc) {
+			if (scriptTimer) clearTimeout(scriptTimer);
+			scriptDoc = '';
+			scriptToken = 0;
+			scriptRunning = false;
+		}
+		if (!showsPreview) {
+			openedPreviewId = '';
+			return;
+		}
+		if (editorFileId === openedPreviewId) return;
+		openedPreviewId = editorFileId;
+		terminalCollapsed = false;
+	});
+
+	$effect(() => {
+		if (!hydrated) return;
+		const showing = showsPreview;
+		const fileId = editorFileId;
+		const nonce = previewNonce;
+		const dark = isDarkTheme(theme);
+		if (!showing || !fileId) return;
+		const rendered = untrack(() => {
+			const target = workspace.files.find((item) => item.id === fileId);
+			if (!target) return null;
+			return {
+				name: target.name,
+				source: target.content,
+				files: linkedProjectFiles(),
+				baseDir: projectDirectory(workspace, target.folderId),
+				ownerId: target.id
+			};
+		});
+		if (!rendered) return;
+		const timer = setTimeout(() => {
+			previewToken += 1;
+			consoleBlocks = consoleBlocks.filter(
+				(block) => block.fileId !== rendered.ownerId || block.kind !== 'preview'
+			);
+			previewDoc = previewDocument(renderDocumentPreview(rendered.name, rendered.source, dark), previewToken, {
+				baseDir: rendered.baseDir,
+				files: rendered.files
+			});
+			void nonce;
+		}, 160);
+		return () => clearTimeout(timer);
+	});
+
+	function openLinkedFile(url: string) {
+		const target = previewTarget;
+		if (!target) return;
+		const path = resolveProjectPath(projectDirectory(workspace, target.folderId), url);
+		if (!path) return;
+		const key = path.toLocaleLowerCase('de');
+		const match = workspace.files.find(
+			(file) => projectFilePath(workspace, file).toLocaleLowerCase('de') === key
+		);
+		if (!match || match.id === workspace.activeFileId) return;
+		showFile(match.id);
+		if (isHtmlFile(match.name) || codeLanguage(match.name) === 'markdown') {
+			terminalCollapsed = false;
+			previewConsoleOpen = false;
+		}
+	}
+
+	function readLinkedFile(url: string): { text: string; mime: string } | null {
+		const target = previewTarget;
+		if (!target) return null;
+		const path = resolveProjectPath(projectDirectory(workspace, target.folderId), url);
+		if (!path) return null;
+		const key = path.toLocaleLowerCase('de');
+		const match = linkedProjectFiles().find((file) => file.path.toLocaleLowerCase('de') === key);
+		if (!match) return null;
+		return { text: match.content, mime: fileMime(match.path) };
+	}
+
+	function openPreviewConsole() {
+		previewConsoleOpen = true;
+		scrollConsoleToEnd();
+	}
+
+	function onPreviewMessage(event: MessageEvent) {
+		const request = readPreviewRequest(event.data, previewToken);
+		if (request?.kind === 'open') {
+			openLinkedFile(request.url);
+			return;
+		}
+		if (request?.kind === 'read') {
+			const file = readLinkedFile(request.url);
+			if (event.source && 'postMessage' in event.source) {
+				(event.source as Window).postMessage(
+					{
+						source: 'kplus-preview-host',
+						token: previewToken,
+						kind: 'file',
+						id: request.id,
+						missing: !file,
+						text: file?.text ?? '',
+						mime: file?.mime ?? 'text/plain'
+					},
+					'*'
+				);
+			}
+			return;
+		}
+		if (readPreviewDone(event.data, scriptToken)) {
+			finishScript();
+			return;
+		}
+		const scriptMessage = scriptToken ? readPreviewMessage(event.data, scriptToken) : null;
+		if (scriptMessage) {
+			scriptLogged = true;
+			const failed = scriptMessage.level === 'error' || scriptMessage.level === 'warn';
+			const line = scriptMessage.line ? Math.max(1, scriptMessage.line - scriptLineOffsetLines) : null;
+			consoleBlocks = [
+				...consoleBlocks,
+				{
+					id: ++consoleSeq,
+					fileId: scriptFileId,
+					runId: null,
+					kind: 'run',
+					title: scriptName,
+					filename: scriptName,
+					stdout: failed ? '' : scriptMessage.text,
+					stderr: failed ? scriptMessage.text : '',
+					status: '',
+					finishedAt: clockTime(),
+					failed,
+					line,
+					column: scriptMessage.column ?? null
+				}
+			];
+			scrollConsoleToEnd();
+			return;
+		}
+		const message = readPreviewMessage(event.data, previewToken);
+		if (!message) return;
+		const failed = message.level === 'error' || message.level === 'warn';
+		const target = previewTarget;
+		const source = target && editorFileId === target.id ? editorCode : (target?.content ?? editorCode);
+		const linkedFile = previewFileFromUrl(message.url ?? '');
+		const line = linkedFile
+			? (message.line ?? null)
+			: message.line && target
+				? editorLineForPreview(source, previewToken, message.line, {
+						baseDir: projectDirectory(workspace, target.folderId),
+						files: linkedProjectFiles()
+					})
+				: null;
+		const origin = linkedFile || target?.name || editorName;
+		const ownerId = target?.id ?? editorFileId;
+		consoleBlocks = [
+			...consoleBlocks,
+			{
+				id: ++consoleSeq,
+				fileId: ownerId,
+				runId: null,
+				kind: 'preview',
+				title: line ? `${origin}:${line}` : origin,
+				filename: origin,
+				stdout: failed ? '' : message.text,
+				stderr: failed ? message.text : '',
+				status: '',
+				finishedAt: clockTime(),
+				failed,
+				line,
+				column: message.column ?? null
+			}
+		];
+		if (previewConsoleOpen) scrollConsoleToEnd();
+	}
+
 	onMount(() => {
 		const savedTheme = localStorage.getItem('theme');
 		applyTheme(parseTheme(savedTheme, window.matchMedia('(prefers-color-scheme: dark)').matches));
@@ -654,11 +1074,13 @@
 		};
 		syncNarrow();
 		narrowQuery.addEventListener('change', syncNarrow);
+		window.addEventListener('message', onPreviewMessage);
 		let cancelled = false;
 		void boot();
 		return () => {
 			cancelled = true;
 			narrowQuery.removeEventListener('change', syncNarrow);
+			window.removeEventListener('message', onPreviewMessage);
 			flushWorkspace();
 			pythonWorker?.terminate();
 			ruffWorker?.terminate();
@@ -698,8 +1120,8 @@
 </script>
 
 <svelte:head>
-	<title>Python Runner — K+</title>
-	<meta name="description" content="Python 3 direkt und vollständig lokal im Browser ausführen." />
+	<title>K+ Coder</title>
+	<meta name="description" content="Python, HTML, CSS und JavaScript direkt und vollständig lokal im Browser." />
 </svelte:head>
 
 <svelte:window
@@ -727,27 +1149,33 @@
 				{#if dirty}<i class="dirty-mark" aria-hidden="true"></i>{/if}
 			</Button>
 			<div class="toolbar">
-				<Badge
+				<Button
 					variant="outline"
-					class="status-badge gap-1.5"
-					aria-label={statusLabel}
-					title={statusLabel}
+					size="icon-sm"
+					onclick={() => (versionsOpen = true)}
+					aria-label="Versionen"
+					title="Versionen"
 				>
-					{#if runnerStatus === 'loading'}<LoaderCircle class="size-3 animate-spin" />{:else}<i
-							class:running={isRunning}
-						></i>{/if}
-					<span class="status-label">{statusLabel}</span>
-				</Badge>
+					<Info />
+				</Button>
 				<ButtonGroup.Root aria-label="Ausführen und Datei">
 					<Button
 						variant="outline"
 						size={narrow ? 'icon-sm' : 'sm'}
 						onclick={runCode}
-						disabled={runnerStatus === 'loading'}
-						aria-label={isRunning ? 'Stopp' : 'Ausführen'}
-						title={runnerStatus === 'loading' ? 'Python wird geladen' : isRunning ? 'Stopp' : 'Ausführen'}
-						>{#if isRunning}<Square />{:else}<Play />{/if}<span class="action-label"
-							>{isRunning ? 'Stopp' : 'Ausführen'}</span
+						disabled={!showsPreview && !isJavaScript && (!isPython || runnerStatus === 'loading')}
+						aria-label={showsPreview ? 'Vorschau neu laden' : stopping ? 'Stopp' : 'Ausführen'}
+						title={showsPreview
+							? 'Vorschau neu laden'
+							: !isJavaScript && !isPython
+								? 'Diese Datei wird nicht ausgeführt'
+								: isPython && runnerStatus === 'loading'
+									? 'Python wird geladen'
+									: stopping
+										? 'Stopp'
+										: 'Ausführen'}
+						>{#if stopping}<Square />{:else}<Play />{/if}<span class="action-label"
+							>{showsPreview ? 'Aktualisieren' : stopping ? 'Stopp' : 'Ausführen'}</span
 						></Button
 					>
 					<Button
@@ -760,11 +1188,9 @@
 					<Button
 						variant="outline"
 						size={narrow ? 'icon-sm' : 'sm'}
-						href="/docs"
-						target="_blank"
-						rel="noopener"
+						onclick={() => (docsOpen = true)}
 						aria-label="Doku"
-						title="Python-Grundlagen"><Book /><span class="action-label">Doku</span></Button
+						title="Doku"><Book /><span class="action-label">Doku</span></Button
 					>
 					{#if sharedCode !== null}
 						<Button
@@ -820,19 +1246,30 @@
 		</header>
 
 		<main class="workspace">
-			{#if terminalCollapsed}
+			{#if scriptDoc}
+				<iframe
+					class="script-runner"
+					title="JavaScript"
+					sandbox="allow-scripts"
+					referrerpolicy="no-referrer"
+					srcdoc={scriptDoc}
+				></iframe>
+			{/if}
+			{#if !showsPane || terminalCollapsed}
 				<section class="editor-pane">{@render editor()}</section>
+				{#if showsPane}
 				<aside class="terminal-rail">
 					<button
 						type="button"
 						class="rail-toggle"
 						onclick={() => (terminalCollapsed = false)}
-						aria-label="Ausgabe einblenden"
-						title="Ausgabe einblenden"
+						aria-label={previewing ? 'Vorschau einblenden' : 'Ausgabe einblenden'}
+						title={previewing ? 'Vorschau einblenden' : 'Ausgabe einblenden'}
 					>
-						<ChevronLeft /><span class="rail-label">Ausgabe</span>
+						<ChevronLeft /><span class="rail-label">{previewing ? 'Vorschau' : 'Ausgabe'}</span>
 					</button>
 				</aside>
+				{/if}
 			{:else}
 				<Resizable.PaneGroup
 					direction={narrow ? 'vertical' : 'horizontal'}
@@ -843,7 +1280,18 @@
 					>
 					<Resizable.Handle withHandle />
 					<Resizable.Pane defaultSize={48} minSize={24}
-						><section class="terminal-pane">{@render terminal()}</section></Resizable.Pane
+						><section
+							class="terminal-pane"
+							class:previewing
+							class:with-console={isHtml}
+							class:console-open={isHtml && previewConsoleOpen}
+						>
+							{#if previewing}
+								{@render preview()}
+							{:else}
+								{@render terminal()}
+							{/if}
+						</section></Resizable.Pane
 					>
 				</Resizable.PaneGroup>
 			{/if}
@@ -860,6 +1308,56 @@
 		onrestore={restoredWorkspace}
 		onsave={saveChooser ? saveShared : undefined}
 	/>
+	<NewFileDialog bind:open={createOpen} oncreate={createNamedFile} />
+	<WelcomeDialog
+		open={!viewingShare && !workspace.welcomed}
+		{theme}
+		ontheme={applyTheme}
+		onstart={finishWelcome}
+	/>
+	<Dialog.Root bind:open={docsOpen}>
+		<Dialog.Content class="docs-popup">
+			<Dialog.Title class="sr-only">Doku</Dialog.Title>
+			<Dialog.Description class="sr-only">Erklärungen zu den Dateitypen.</Dialog.Description>
+			<DocsBrowser fill />
+		</Dialog.Content>
+	</Dialog.Root>
+	<Dialog.Root bind:open={versionsOpen}>
+		<Dialog.Content class="flex max-h-[min(40rem,calc(100dvh-2rem))] flex-col overflow-hidden sm:max-w-md">
+			<Dialog.Header>
+				<Dialog.Title>Versionen</Dialog.Title>
+				<Dialog.Description>Python und die installierten Pakete.</Dialog.Description>
+			</Dialog.Header>
+			<div class="versions">
+				<p>
+					<span>Python</span>
+					<span>{pythonStatus}</span>
+				</p>
+				<section>
+					<h3>Abhängigkeiten</h3>
+					<ul>
+						{#each runtimePackages as item (item.name)}
+							<li>
+								<span title={item.name}>{item.name}</span>
+								<span>{item.version}</span>
+							</li>
+						{/each}
+					</ul>
+				</section>
+				<section>
+					<h3>Entwicklung</h3>
+					<ul>
+						{#each toolPackages as item (item.name)}
+							<li>
+								<span title={item.name}>{item.name}</span>
+								<span>{item.version}</span>
+							</li>
+						{/each}
+					</ul>
+				</section>
+			</div>
+		</Dialog.Content>
+	</Dialog.Root>
 
 	<AlertDialog.Root bind:open={clearOpen}>
 		<AlertDialog.Content>
@@ -918,7 +1416,7 @@
 					class="tab-plus"
 					aria-label="Neue Datei"
 					title="Neue Datei"
-					onclick={addFile}
+					onclick={() => (createOpen = true)}
 				>
 					<Plus />
 				</button>
@@ -954,6 +1452,7 @@
 				bind:this={codeEditor}
 				fileId={editorFileId}
 				value={editorCode}
+				language={codeLanguage(editorName)}
 				{diagnostics}
 				{theme}
 				wrapLines={narrow}
@@ -1016,6 +1515,126 @@
 	</div>
 {/snippet}
 
+{#snippet consoleBody()}
+	<div class="console-scroll" bind:this={consoleViewport}>
+		{#if fileConsole.length === 0}
+			<div class="console-empty">
+				<p>Keine Ausgabe</p>
+				<p class="muted">
+					{previewing
+						? 'Meldungen der Vorschau erscheinen hier.'
+						: 'Sie erscheint hier, sobald du den Code ausführst.'}
+				</p>
+			</div>
+		{:else}
+			<ol class="console-log" aria-live="polite">
+				{#each fileConsole as block (block.id)}
+					<li class="console-block" class:run={block.kind === 'run'} class:failed={block.failed}>
+						<div class="console-title">
+							<span>{block.title}</span>
+							<button
+								type="button"
+								class="console-dismiss"
+								aria-label="Ausgabe entfernen"
+								title="Ausgabe entfernen"
+								onclick={() => dismissConsole(block.id)}><X /></button
+							>
+						</div>
+						{#if block.stdout}
+							<div class="console-line">
+								<pre class="console-out">{block.stdout}</pre>
+								{#if block.line}
+									<Button
+										variant="outline"
+										size="xs"
+										onclick={() => revealConsoleLine(block)}
+										title="Im Editor zeigen">Wo?</Button
+									>
+								{/if}
+							</div>
+						{/if}
+						{#if block.stderr}
+							<div class="console-err">
+								<pre class="console-err-text">{block.stderr}</pre>
+								{#if block.line || consoleWhere(block)}
+									<Button
+										variant="outline"
+										size="xs"
+										onclick={() => revealConsoleLine(block)}
+										title="Im Editor zeigen">Wo?</Button
+									>
+								{/if}
+							</div>
+						{/if}
+						{#if block.status || block.finishedAt}
+							<p class="console-status">
+								<span>{block.status}</span>
+								{#if block.finishedAt}<time>{block.finishedAt}</time>{/if}
+							</p>
+						{/if}
+					</li>
+				{/each}
+			</ol>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet preview()}
+	<div class="preview-stage">
+		<button
+			type="button"
+			class="preview-collapse"
+			onclick={() => (terminalCollapsed = true)}
+			aria-label="Vorschau einklappen"
+			title="Vorschau einklappen"><ChevronRight /></button
+		>
+		{#if previewDoc}
+			<iframe
+				title="Vorschau"
+				sandbox="allow-scripts allow-forms allow-popups allow-modals"
+				referrerpolicy="no-referrer"
+				srcdoc={previewDoc}
+			></iframe>
+		{/if}
+	</div>
+	{#if isHtml && previewConsoleOpen}
+		<div class="preview-console">
+			<div class="pane-header console-split-header">
+				<h2>Konsole</h2>
+				<ButtonGroup.Root aria-label="Konsole steuern">
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						onclick={clearConsole}
+						aria-label="Konsole löschen"
+						title="Konsole löschen"><Trash2 /></Button
+					>
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						onclick={() => (previewConsoleOpen = false)}
+						aria-label="Konsole einklappen"
+						title="Konsole einklappen"><ChevronDown /></Button
+					>
+				</ButtonGroup.Root>
+			</div>
+			{@render consoleBody()}
+		</div>
+	{:else if isHtml}
+		<button
+			type="button"
+			class="console-row"
+			onclick={openPreviewConsole}
+			aria-expanded="false"
+			aria-label="Konsole einblenden"
+			title="Konsole einblenden"
+		>
+			<ChevronUp />
+			<span>Konsole</span>
+		</button>
+	{/if}
+{/snippet}
+
 {#snippet terminal()}
 	<div class="pane-header">
 		<h2>Ausgabe</h2>
@@ -1036,52 +1655,7 @@
 			>
 		</ButtonGroup.Root>
 	</div>
-	<div class="console-scroll" bind:this={consoleViewport}>
-		{#if consoleBlocks.length === 0}
-			<div class="console-empty">
-				<p>Keine Ausgabe</p>
-				<p class="muted">Sie erscheint hier, sobald du den Code ausführst.</p>
-			</div>
-		{:else}
-		<ol class="console-log" aria-live="polite">
-			{#each consoleBlocks as block (block.id)}
-				<li class="console-block" class:run={block.kind === 'run'} class:failed={block.failed}>
-					<div class="console-title">
-						<span>{block.title}</span>
-						<button
-							type="button"
-							class="console-dismiss"
-							aria-label="Ausgabe entfernen"
-							title="Ausgabe entfernen"
-							onclick={() => dismissConsole(block.id)}><X /></button
-						>
-					</div>
-					{#if block.stdout}<pre class="console-out">{block.stdout}</pre>{/if}
-					{#if block.stderr}
-						{@const where = consoleWhere(block)}
-						<div class="console-err">
-							<pre class="console-err-text">{block.stderr}</pre>
-							{#if where}
-								<Button
-									variant="outline"
-									size="xs"
-									onclick={() => showLinkedProblem(where)}
-									title="Im Editor zeigen">Wo?</Button
-								>
-							{/if}
-						</div>
-					{/if}
-					{#if block.status}
-						<p class="console-status">
-							<span>{block.status}</span>
-							{#if block.finishedAt}<time>{block.finishedAt}</time>{/if}
-						</p>
-					{/if}
-				</li>
-			{/each}
-		</ol>
-		{/if}
-	</div>
+	{@render consoleBody()}
 	<footer>Cmd/Strg + Enter</footer>
 {/snippet}
 
@@ -1148,15 +1722,6 @@
 		justify-content: flex-end;
 		gap: 0.4rem;
 	}
-	.toolbar i {
-		width: 0.4rem;
-		height: 0.4rem;
-		border-radius: 50%;
-		background: oklch(0.64 0.16 151);
-	}
-	.toolbar i.running {
-		background: oklch(0.72 0.16 70);
-	}
 	.dirty-mark {
 		width: 0.42rem;
 		height: 0.42rem;
@@ -1168,6 +1733,9 @@
 		min-width: 0;
 		min-height: 0;
 		overflow: hidden;
+	}
+	.workspace > .editor-pane {
+		flex: 1 1 auto;
 	}
 	.editor-pane,
 	.terminal-pane {
@@ -1379,6 +1947,89 @@
 		overflow: hidden;
 		background: color-mix(in oklch, var(--muted) 22%, var(--background));
 	}
+	.terminal-pane.previewing {
+		grid-template-rows: minmax(0, 1fr);
+		background: var(--background);
+	}
+	.terminal-pane.previewing.with-console {
+		grid-template-rows: minmax(0, 1fr) auto;
+	}
+	.terminal-pane.previewing.console-open {
+		grid-template-rows: minmax(0, 1fr) minmax(9rem, 42%);
+	}
+	.script-runner {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		border: 0;
+		opacity: 0;
+		pointer-events: none;
+	}
+	.preview-stage {
+		position: relative;
+		min-width: 0;
+		min-height: 0;
+		background: #fff;
+	}
+	.preview-collapse {
+		position: absolute;
+		top: 0.35rem;
+		right: 0.35rem;
+		z-index: 2;
+		display: grid;
+		width: 1.7rem;
+		height: 1.7rem;
+		place-items: center;
+		border: 1px solid var(--border);
+		border-radius: 0.35rem;
+		background: color-mix(in oklch, #fff 88%, transparent);
+		color: #1a1a1a;
+		cursor: pointer;
+	}
+	.preview-collapse :global(svg) {
+		width: 1rem;
+		height: 1rem;
+	}
+	.preview-stage iframe {
+		display: block;
+		width: 100%;
+		height: 100%;
+		border: 0;
+		background: #fff;
+	}
+	.preview-console {
+		display: grid;
+		grid-template-rows: auto minmax(0, 1fr);
+		min-width: 0;
+		min-height: 0;
+		border-top: 1px solid var(--border);
+		background: color-mix(in oklch, var(--muted) 22%, var(--background));
+	}
+	.console-split-header {
+		min-height: 2.3rem;
+	}
+	.console-row {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		width: 100%;
+		min-height: 2.35rem;
+		padding: 0 0.8rem;
+		border: 0;
+		border-top: 1px solid var(--border);
+		background: var(--secondary);
+		color: var(--foreground);
+		font: 600 0.78rem/1 var(--font-sans);
+		cursor: pointer;
+	}
+	.console-row:hover {
+		background: color-mix(in oklch, var(--foreground) 7%, var(--secondary));
+	}
+	.console-row :global(svg) {
+		width: 1rem;
+		height: 1rem;
+	}
 	.console-scroll {
 		display: flex;
 		flex-direction: column;
@@ -1490,7 +2141,17 @@
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
-	.console-out + .console-err {
+	.console-line {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.55rem;
+		padding: 0.65rem 0.75rem 0.7rem;
+	}
+	.console-line .console-out {
+		padding: 0;
+	}
+	.console-line + .console-err {
 		border-top: 1px dashed color-mix(in oklch, var(--destructive) 45%, var(--border));
 	}
 	.console-status {
@@ -1560,6 +2221,69 @@
 		box-shadow: 0 10px 26px oklch(0 0 0 / 14%);
 		font-size: 0.78rem;
 	}
+	:global(.docs-popup) {
+		top: 10dvh !important;
+		left: 10dvw !important;
+		display: flex !important;
+		flex-direction: column;
+		width: 80dvw !important;
+		height: 80dvh !important;
+		max-width: none !important;
+		max-height: none !important;
+		transform: none !important;
+		translate: none !important;
+		gap: 0;
+		padding: 0 !important;
+		overflow: hidden;
+	}
+	:global(.docs-popup .browser) {
+		flex: 1 1 auto;
+		min-height: 0;
+	}
+	.versions {
+		display: grid;
+		gap: 0.9rem;
+		min-height: 0;
+		overflow: auto;
+		padding-right: 0.15rem;
+	}
+	.versions p,
+	.versions li {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 1rem;
+		margin: 0;
+		font: 500 0.75rem/1.45 var(--font-code);
+	}
+	.versions p span:first-child,
+	.versions li span:first-child {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.versions p span:last-child,
+	.versions li span:last-child {
+		flex: 0 0 auto;
+		color: var(--muted-foreground);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+	.versions h3 {
+		margin: 0 0 0.3rem;
+		color: var(--muted-foreground);
+		font: 650 0.68rem/1.3 var(--font-sans);
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+	}
+	.versions ul {
+		display: grid;
+		gap: 0.15rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
 	@media (max-width: 899px) {
 		.topbar {
 			gap: 0.45rem;
@@ -1569,8 +2293,7 @@
 		.topbar > :global(:first-child) {
 			flex: 0 0 auto;
 		}
-		.action-label,
-		.status-label {
+		.action-label {
 			display: none;
 		}
 		:global(.files-button) {
@@ -1619,7 +2342,8 @@
 		.terminal-pane footer {
 			display: none;
 		}
-		.terminal-pane :global([aria-label='Ausgabe einklappen'] svg) {
+		.terminal-pane :global([aria-label='Ausgabe einklappen'] svg),
+		.terminal-pane :global([aria-label='Vorschau einklappen'] svg) {
 			transform: rotate(90deg);
 		}
 		.terminal-rail {

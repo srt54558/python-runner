@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+	import { css } from '@codemirror/lang-css';
+	import { html } from '@codemirror/lang-html';
+	import { javascript } from '@codemirror/lang-javascript';
+	import { json } from '@codemirror/lang-json';
+	import { markdown } from '@codemirror/lang-markdown';
 	import { python } from '@codemirror/lang-python';
+	import { xml } from '@codemirror/lang-xml';
 	import { bracketMatching, indentOnInput, indentUnit } from '@codemirror/language';
 	import { lintGutter, setDiagnostics } from '@codemirror/lint';
 	import {
@@ -24,15 +30,17 @@
 		keymap,
 		lineNumbers
 	} from '@codemirror/view';
+	import { languageAssist } from '$lib/editor/assist';
 	import { diagnosticsForDocument, positionToOffset } from '$lib/editor/diagnostics';
-	import { pythonAssist } from '$lib/editor/assist';
 	import { themeExtensions } from '$lib/editor/themes';
 	import type { RuffDiagnostic } from '$lib/runner/protocol';
 	import type { AppTheme } from '$lib/theme';
+	import type { CodeLanguage } from '$lib/workspace/model';
 
 	let {
 		fileId,
 		value,
+		language = 'python',
 		diagnostics,
 		theme,
 		visible = true,
@@ -42,6 +50,7 @@
 	}: {
 		fileId: string;
 		value: string;
+		language?: CodeLanguage;
 		diagnostics: RuffDiagnostic[];
 		theme: AppTheme;
 		visible?: boolean;
@@ -53,6 +62,7 @@
 	const externalChange = Annotation.define<boolean>();
 	const themeCompartment = new Compartment();
 	const wrapCompartment = new Compartment();
+	const languageCompartment = new Compartment();
 	let host = $state<HTMLDivElement | null>(null);
 	let ready = $state(false);
 	let view: EditorView | undefined;
@@ -70,6 +80,47 @@
 		if (next !== value) onchange(next);
 	}
 
+	function languageExtensions(current: CodeLanguage) {
+		const labels: Record<CodeLanguage, string> = {
+			python: 'Python-Code',
+			html: 'HTML-Code',
+			javascript: 'JavaScript-Code',
+			css: 'CSS-Code',
+			json: 'JSON-Code',
+			xml: 'XML-Code',
+			markdown: 'Markdown',
+			text: 'Text'
+		};
+		const grammar =
+			current === 'html'
+				? [html({ selfClosingTags: true })]
+				: current === 'javascript'
+					? [javascript()]
+					: current === 'css'
+						? [css()]
+						: current === 'json'
+							? [json()]
+							: current === 'xml'
+								? [xml()]
+								: current === 'markdown'
+									? [markdown()]
+									: current === 'python'
+										? [python()]
+										: [];
+		return [
+			...grammar,
+			...languageAssist(current),
+			EditorView.contentAttributes.of({
+				spellcheck: 'false',
+				autocorrect: 'off',
+				autocapitalize: 'off',
+				autocomplete: 'off',
+				writingsuggestions: 'false',
+				'aria-label': labels[current]
+			})
+		];
+	}
+
 	function createState(doc: string) {
 		return EditorState.create({
 			doc,
@@ -84,8 +135,7 @@
 				indentOnInput(),
 				bracketMatching(),
 				closeBrackets(),
-				python(),
-				pythonAssist,
+				languageCompartment.of(languageExtensions(language)),
 				Prec.highest(
 					keymap.of([
 						{ key: 'Mod-Enter', run: () => true },
@@ -96,14 +146,6 @@
 				lintGutter(),
 				themeCompartment.of(themeExtensions(theme)),
 				wrapCompartment.of(wrapLines ? EditorView.lineWrapping : []),
-				EditorView.contentAttributes.of({
-					spellcheck: 'false',
-					autocorrect: 'off',
-					autocapitalize: 'off',
-					autocomplete: 'off',
-					writingsuggestions: 'false',
-					'aria-label': 'Python-Code'
-				}),
 				EditorView.updateListener.of((update) => {
 					if (
 						update.docChanged &&
@@ -200,6 +242,11 @@
 	$effect(() => {
 		if (!ready || !view) return;
 		view.dispatch({ effects: themeCompartment.reconfigure(themeExtensions(theme)) });
+	});
+
+	$effect(() => {
+		if (!ready || !view) return;
+		view.dispatch({ effects: languageCompartment.reconfigure(languageExtensions(language)) });
 	});
 
 	$effect(() => {

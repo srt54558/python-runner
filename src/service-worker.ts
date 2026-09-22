@@ -6,7 +6,7 @@
 import { build, files, prerendered, version } from '$service-worker';
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
-const CACHE = `python-runner-${version}`;
+const CACHE = `k-plus-coder-${version}`;
 
 // `_headers` is a Cloudflare config file, not an app asset. `_app` stays included.
 const PRECACHE = [...new Set([...build, ...files, ...prerendered])].filter((pathname) => {

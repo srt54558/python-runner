@@ -1,8 +1,8 @@
 {
 	"id": "/",
-	"name": "Python Runner",
-	"short_name": "Py Runner",
-	"description": "Python 3 direkt und vollständig lokal im Browser ausführen.",
+	"name": "K+ Coder",
+	"short_name": "K+ Coder",
+	"description": "Python, HTML, CSS und JavaScript direkt und vollständig lokal im Browser.",
 	"lang": "de",
 	"dir": "ltr",
 	"start_url": "/",

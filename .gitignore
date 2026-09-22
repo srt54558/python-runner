@@ -1,5 +1,8 @@
 node_modules
 .playwright-cli
+/playwright-report/
+/test-results/
+/blob-report/
 
 # Output
 .output

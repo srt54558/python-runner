@@ -11,7 +11,7 @@
 	},
 	"routes": [
 		{
-			"pattern": "python.k-plus.one",
+			"pattern": "coder.k-plus.one",
 			"custom_domain": true
 		}
 	]

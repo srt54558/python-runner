@@ -45,9 +45,9 @@
 <div class="demo">
 	<textarea
 		spellcheck="false"
-		autocorrect="off"
 		autocapitalize="off"
 		autocomplete="off"
+		{@attach (node) => node.setAttribute('autocorrect', 'off')}
 		aria-label="Beispiel"
 		value={draft}
 		oninput={(event) => (edited = event.currentTarget.value)}

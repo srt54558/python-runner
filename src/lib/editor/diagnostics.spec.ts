@@ -29,4 +29,17 @@ describe('editor diagnostics', () => {
 		expect(diagnostic.severity).toBe('error');
 		expect(diagnostic.to).toBeGreaterThan(diagnostic.from);
 	});
+
+	it('underlines only the line where a diagnostic starts', () => {
+		const doc = '<div>\n<p>Hallo</p>\n</html>';
+		const [diagnostic] = diagnosticsForDocument(doc, [
+			{
+				code: 'HTML',
+				message: '<div> ist nicht geschlossen.',
+				start_location: { row: 1, column: 1 },
+				end_location: { row: 3, column: 8 }
+			}
+		]);
+		expect(doc.slice(diagnostic.from, diagnostic.to)).toBe('<div>');
+	});
 });

@@ -1,4 +1,4 @@
-import type { RuffDiagnostic } from '$lib/runner/protocol';
+import { isDiagnosticError, type RuffDiagnostic } from '$lib/runner/protocol';
 
 const FRAME = /^ {2}File "([^"]+)", line (\d+)/;
 
@@ -69,7 +69,7 @@ function caretColumns(block: string[]): { column: number; endColumn: number } | 
 }
 
 function isError(diagnostic: RuffDiagnostic): boolean {
-	return !diagnostic.code || diagnostic.code.startsWith('E9');
+	return isDiagnosticError(diagnostic.code);
 }
 
 function covers(

@@ -47,6 +47,19 @@ json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)`;
 json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)`);
 	});
 
+	it('shows workspace files without the mount folder', () => {
+		const raw = `Traceback (most recent call last):
+  File "/workspace/helper.py", line 1, in <module>
+NameError: name 'x' is not defined`;
+		expect(presentPythonError(raw, 'main.py')).toBe(`Traceback (most recent call last):
+  File "helper.py", line 1, in <module>
+NameError: name 'x' is not defined`);
+		const nested = `Traceback (most recent call last):
+  File "/workspace/src/helper.py", line 3, in <module>
+NameError: name 'x' is not defined`;
+		expect(presentPythonError(nested, 'main.py')).toContain('File "src/helper.py", line 3');
+	});
+
 	it('leaves a message that is not a Python traceback unchanged', () => {
 		expect(presentPythonError('Python konnte nicht geladen werden.')).toBe(
 			'Python konnte nicht geladen werden.'

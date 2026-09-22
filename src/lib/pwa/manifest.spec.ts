@@ -15,7 +15,8 @@ const manifest = JSON.parse(readFileSync('static/manifest.webmanifest', 'utf8'))
 
 describe('installable web app manifest', () => {
 	it('has the fields browsers require before they offer install', () => {
-		expect(manifest.name || manifest.short_name).toBeTruthy();
+		expect(manifest.name).toBe('K+ Coder');
+		expect(manifest.short_name).toBe('K+ Coder');
 		expect(manifest.start_url).toBe('/');
 		expect(manifest.scope).toBe('/');
 		expect(manifest.display).toBe('standalone');

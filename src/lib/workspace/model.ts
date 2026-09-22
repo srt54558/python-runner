@@ -30,6 +30,8 @@ export interface WorkspaceSnapshot {
 	activeFileId: string;
 	selectedFolderId: string;
 	layout: WorkspaceLayout;
+	/** False until the first-launch choice has created the opening file. */
+	welcomed: boolean;
 }
 
 export const STARTER_CODE = `from datetime import datetime
@@ -45,6 +47,7 @@ export function createId(prefix: 'file' | 'folder'): string {
 
 export function createInitialWorkspace(legacyDraft?: string | null): WorkspaceSnapshot {
 	const mainId = createId('file');
+	const migrated = typeof legacyDraft === 'string';
 	return {
 		version: WORKSPACE_VERSION,
 		folders: [{ id: ROOT_FOLDER_ID, name: 'Projekt', parentId: null }],
@@ -53,14 +56,15 @@ export function createInitialWorkspace(legacyDraft?: string | null): WorkspaceSn
 				id: mainId,
 				name: 'main.py',
 				folderId: ROOT_FOLDER_ID,
-				content: legacyDraft ?? STARTER_CODE,
+				content: migrated ? legacyDraft : '',
 				updatedAt: Date.now()
 			}
 		],
 		openFileIds: [mainId],
 		activeFileId: mainId,
 		selectedFolderId: ROOT_FOLDER_ID,
-		layout: { problemsOpen: false, problemsSize: 30, terminalCollapsed: false }
+		layout: { problemsOpen: false, problemsSize: 30, terminalCollapsed: false },
+		welcomed: migrated
 	};
 }
 
@@ -73,8 +77,179 @@ export function normalizeFileName(value: string): string {
 	return normalized || 'datei.py';
 }
 
+const PYTHON_EXTENSIONS = new Set(['py', 'pyw', 'pyi']);
+const SUPPORTED_EXTENSIONS = new Set([
+	'py',
+	'pyw',
+	'pyi',
+	'html',
+	'htm',
+	'js',
+	'css',
+	'json',
+	'xml',
+	'txt',
+	'md'
+]);
+
+export type CodeLanguage =
+	| 'python'
+	| 'html'
+	| 'javascript'
+	| 'css'
+	| 'json'
+	| 'xml'
+	| 'markdown'
+	| 'text';
+
+export function fileExtension(name: string): string {
+	const base = name.trim().split(/[\\/]/u).pop() ?? '';
+	const dot = base.lastIndexOf('.');
+	if (dot <= 0) return '';
+	return base.slice(dot + 1).toLocaleLowerCase('de');
+}
+
 export function isPythonFile(name: string): boolean {
-	return name.toLocaleLowerCase('de').endsWith('.py');
+	return PYTHON_EXTENSIONS.has(fileExtension(name));
+}
+
+export function isHtmlFile(name: string): boolean {
+	const extension = fileExtension(name);
+	return extension === 'html' || extension === 'htm';
+}
+
+export function isDocumentFile(name: string): boolean {
+	const extension = fileExtension(name);
+	return extension === 'md' || extension === 'json' || extension === 'xml' || extension === 'txt';
+}
+
+export function newFileNameError(raw: string): string | null {
+	const name = normalizeName(raw);
+	if (!name) return 'Gib einen Namen ein.';
+	const extension = fileExtension(name);
+	if (!extension) return 'Der Name braucht eine Endung.';
+	if (!SUPPORTED_EXTENSIONS.has(extension)) return 'Dieses Format wird nicht unterstützt.';
+	return null;
+}
+
+export function codeLanguage(name: string): CodeLanguage {
+	switch (fileExtension(name)) {
+		case 'py':
+		case 'pyw':
+		case 'pyi':
+			return 'python';
+		case 'html':
+		case 'htm':
+			return 'html';
+		case 'js':
+			return 'javascript';
+		case 'css':
+			return 'css';
+		case 'json':
+			return 'json';
+		case 'xml':
+			return 'xml';
+		case 'md':
+			return 'markdown';
+		default:
+			return 'text';
+	}
+}
+
+export function fileMime(name: string): string {
+	switch (fileExtension(name)) {
+		case 'html':
+		case 'htm':
+			return 'text/html';
+		case 'css':
+			return 'text/css';
+		case 'js':
+			return 'text/javascript';
+		case 'json':
+			return 'application/json';
+		case 'xml':
+			return 'application/xml';
+		case 'md':
+			return 'text/markdown';
+		case 'py':
+		case 'pyw':
+		case 'pyi':
+			return 'text/x-python';
+		default:
+			return 'text/plain';
+	}
+}
+
+export const HTML_STARTER = `<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Seite</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    h1 { color: #c45c26; }
+  </style>
+</head>
+<body>
+  <h1>Hallo</h1>
+  <button id="knopf">Klick</button>
+  <script>
+    document.querySelector("#knopf").addEventListener("click", () => {
+      document.querySelector("h1").textContent = "Geklickt";
+      console.log("Geklickt");
+    });
+    console.log("Seite geladen");
+  </script>
+</body>
+</html>
+`;
+
+export const WELCOME_LANGUAGES = [
+	'python',
+	'html',
+	'css',
+	'javascript',
+	'json',
+	'xml',
+	'markdown',
+	'text'
+] as const;
+
+export type WelcomeLanguage = (typeof WELCOME_LANGUAGES)[number];
+
+export const WELCOME_FILES: Record<WelcomeLanguage, { name: string; label: string; content: string }> = {
+	python: { name: 'main.py', label: 'Python', content: STARTER_CODE },
+	html: { name: 'seite.html', label: 'HTML', content: HTML_STARTER },
+	css: { name: 'style.css', label: 'CSS', content: 'body {\n    font-family: sans-serif;\n}\n' },
+	javascript: { name: 'app.js', label: 'JavaScript', content: 'console.log("Hallo");\n' },
+	json: { name: 'daten.json', label: 'JSON', content: '{\n    "name": "Welt"\n}\n' },
+	xml: { name: 'daten.xml', label: 'XML', content: '<name>Welt</name>\n' },
+	markdown: { name: 'notiz.md', label: 'Markdown', content: '# Hallo\n' },
+	text: { name: 'notiz.txt', label: 'Text', content: 'Hallo\n' }
+};
+
+/** Replace the empty opening file with the language chosen in the welcome dialog. */
+export function applyWelcomeChoice(
+	snapshot: WorkspaceSnapshot,
+	language: WelcomeLanguage
+): WorkspaceSnapshot {
+	const choice = WELCOME_FILES[language];
+	const only = snapshot.files.length === 1 ? snapshot.files[0] : undefined;
+	if (!only || only.content.trim()) return { ...snapshot, welcomed: true };
+	const file: WorkspaceFile = {
+		...only,
+		name: choice.name,
+		content: choice.content,
+		updatedAt: Date.now()
+	};
+	return {
+		...snapshot,
+		welcomed: true,
+		files: [file],
+		openFileIds: [file.id],
+		activeFileId: file.id,
+		selectedFolderId: file.folderId
+	};
 }
 
 export function uniqueName(existing: string[], requested: string): string {
@@ -105,6 +280,30 @@ export function folderPath(folders: WorkspaceFolder[], folderId: string): string
 	return parts.join('/');
 }
 
+export function projectDirectory(snapshot: WorkspaceSnapshot, folderId: string): string {
+	const parts: string[] = [];
+	const visited = new Set<string>();
+	let current = snapshot.folders.find((folder) => folder.id === folderId);
+	while (current && current.parentId && !visited.has(current.id)) {
+		visited.add(current.id);
+		parts.unshift(current.name);
+		current = snapshot.folders.find((folder) => folder.id === current?.parentId);
+	}
+	return parts.join('/');
+}
+
+export function projectFilePath(snapshot: WorkspaceSnapshot, file: WorkspaceFile): string {
+	const directory = projectDirectory(snapshot, file.folderId);
+	return directory ? `${directory}/${file.name}` : file.name;
+}
+
+export function projectFiles(snapshot: WorkspaceSnapshot): { path: string; content: string }[] {
+	return snapshot.files.map((file) => ({
+		path: projectFilePath(snapshot, file),
+		content: file.content
+	}));
+}
+
 export function sanitizeWorkspace(value: WorkspaceSnapshot): WorkspaceSnapshot {
 	const folders = value.folders?.length
 		? value.folders
@@ -131,7 +330,8 @@ export function sanitizeWorkspace(value: WorkspaceSnapshot): WorkspaceSnapshot {
 			problemsOpen: Boolean(value.layout?.problemsOpen),
 			problemsSize: Math.min(55, Math.max(20, value.layout?.problemsSize ?? 30)),
 			terminalCollapsed: Boolean(value.layout?.terminalCollapsed)
-		}
+		},
+		welcomed: value.welcomed !== false
 	};
 }
 
@@ -190,10 +390,11 @@ function siblingFileNames(snapshot: WorkspaceSnapshot, folderId: string, exceptI
 		.map((file) => file.name);
 }
 
-function fileNameFromInput(value: string): string {
-	const normalized = normalizeFileName(value);
-	if (normalized === '.' || normalized === '..') return 'datei.py';
-	return normalized.includes('.') ? normalized : `${normalized}.py`;
+function acceptedFileName(value: string): string | null {
+	const normalized = normalizeName(value);
+	if (!normalized || normalized === '.' || normalized === '..') return null;
+	if (newFileNameError(normalized)) return null;
+	return normalized;
 }
 
 export function updateFileContent(
@@ -269,7 +470,9 @@ export function importFiles(
 	let next = snapshot;
 	let lastId = '';
 	for (const item of incoming) {
-		const name = uniqueName(siblingFileNames(next, folderId), fileNameFromInput(item.name));
+		const requested = acceptedFileName(item.name);
+		if (!requested) continue;
+		const name = uniqueName(siblingFileNames(next, folderId), requested);
 		const file: WorkspaceFile = {
 			id: createId('file'),
 			name,
@@ -286,15 +489,18 @@ export function importFiles(
 export function createFile(
 	snapshot: WorkspaceSnapshot,
 	folderId: string,
-	rawName: string
+	rawName: string,
+	content = ''
 ): WorkspaceSnapshot {
 	if (!snapshot.folders.some((folder) => folder.id === folderId)) return snapshot;
-	const name = uniqueName(siblingFileNames(snapshot, folderId), fileNameFromInput(rawName));
+	const requested = acceptedFileName(rawName);
+	if (!requested) return snapshot;
+	const name = uniqueName(siblingFileNames(snapshot, folderId), requested);
 	const file: WorkspaceFile = {
 		id: createId('file'),
 		name,
 		folderId,
-		content: '',
+		content,
 		updatedAt: Date.now()
 	};
 	return openFile({ ...snapshot, files: [...snapshot.files, file], selectedFolderId: folderId }, file.id);
@@ -325,7 +531,9 @@ export function renameFile(
 ): WorkspaceSnapshot {
 	const file = snapshot.files.find((item) => item.id === fileId);
 	if (!file) return snapshot;
-	const name = uniqueName(siblingFileNames(snapshot, file.folderId, fileId), fileNameFromInput(rawName));
+	const requested = acceptedFileName(rawName);
+	if (!requested) return snapshot;
+	const name = uniqueName(siblingFileNames(snapshot, file.folderId, fileId), requested);
 	if (name === file.name) return snapshot;
 	return {
 		...snapshot,

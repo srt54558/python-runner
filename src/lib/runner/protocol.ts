@@ -13,6 +13,12 @@ export interface RuffDiagnostic {
 	end_location: { row: number; column: number };
 }
 
+/** Syntax and language errors. Other codes stay warnings, matching Ruff's F-rules. */
+export function isDiagnosticError(code: string | null): boolean {
+	if (!code || code.startsWith('E9') || code === 'Syntax') return true;
+	return code === 'JS' || code === 'CSS' || code === 'HTML' || code === 'JSON' || code === 'XML' || code === 'MD';
+}
+
 export type RuffWorkerMessage =
 	| { type: 'ready'; version: string }
 	| { type: 'diagnostics'; id: number; diagnostics: RuffDiagnostic[] }

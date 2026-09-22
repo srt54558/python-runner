@@ -20,17 +20,17 @@ function sampleWorkspace() {
 	snapshot = createFolder(snapshot, ROOT_FOLDER_ID, 'src');
 	snapshot = createFolder(snapshot, ROOT_FOLDER_ID, 'leer');
 	const src = snapshot.folders.find((folder) => folder.name === 'src');
-	snapshot = createFile(snapshot, src?.id ?? '', 'hallo');
+	snapshot = createFile(snapshot, src?.id ?? '', 'hallo.py');
 	const hallo = snapshot.files.find((file) => file.name === 'hallo.py');
 	snapshot = updateFileContent(snapshot, hallo?.id ?? '', 'print(1)\n');
-	snapshot = createFile(snapshot, ROOT_FOLDER_ID, 'escape');
+	snapshot = createFile(snapshot, ROOT_FOLDER_ID, 'escape.py');
 	snapshot = {
 		...snapshot,
 		files: snapshot.files.map((file) =>
 			file.name === 'escape.py' ? { ...file, name: '../escape.py' } : file
 		)
 	};
-	snapshot = createFile(snapshot, ROOT_FOLDER_ID, WORKSPACE_ARCHIVE_NAME.replace(/\.py$/u, ''));
+	snapshot = createFile(snapshot, ROOT_FOLDER_ID, WORKSPACE_ARCHIVE_NAME);
 	const marked = snapshot.files.find((file) => file.name === 'main.py');
 	return updateFileContent(
 		snapshot,

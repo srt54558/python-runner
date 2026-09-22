@@ -13,7 +13,12 @@ interface PyodideRuntime {
 	): Promise<unknown>;
 	setStdout(options: { batched: (text: string) => void }): void;
 	setStderr(options: { batched: (text: string) => void }): void;
-	globals: { get(name: string): (...args: unknown[]) => PyProxy };
+	globals: PyGlobals;
+}
+
+interface PyGlobals {
+	get(name: string): (...args: unknown[]) => PyProxy;
+	set(name: string, value: unknown): void;
 }
 
 interface PyProxy {
@@ -42,12 +47,55 @@ const runtimePromise = (async () => {
 	throw error;
 });
 
+const MOUNT_PROJECT = `
+import json, os, shutil, sys
+os.chdir("/")
+root = "/workspace"
+if os.path.isdir(root):
+    shutil.rmtree(root)
+os.makedirs(root)
+files = json.loads(__project_files)
+for path, content in files.items():
+    parts = str(path).split("/")
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        continue
+    folder = root
+    for part in parts[:-1]:
+        folder = os.path.join(folder, part)
+        os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(root, *parts), "w", encoding="utf-8") as handle:
+        handle.write(content)
+os.chdir(root)
+entry = str(__project_entry or "")
+script_dir = os.path.dirname(os.path.join(root, entry)) or root
+sys.path[:] = [item for item in sys.path if not (isinstance(item, str) and (item == root or item.startswith(root + "/")))]
+sys.path.insert(0, script_dir)
+for name in list(sys.modules):
+    module = sys.modules.get(name)
+    module_file = getattr(module, "__file__", None)
+    if isinstance(module_file, str) and (module_file == root or module_file.startswith(root + "/")):
+        del sys.modules[name]
+del __project_files
+del __project_entry
+`;
+
+function isSafeProjectPath(path: string): boolean {
+	if (!path || path.startsWith('/') || path.includes('\\') || path.includes('\0')) return false;
+	return path.split('/').every((part) => part !== '' && part !== '.' && part !== '..');
+}
+
 self.onmessage = async (
-	event: MessageEvent<{ type: 'run'; id: number; code: string; filename?: string }>
+	event: MessageEvent<{
+		type: 'run';
+		id: number;
+		code: string;
+		filename?: string;
+		files?: { path: string; content: string }[];
+	}>
 ) => {
 	if (event.data.type !== 'run') return;
 
-	const { id, code, filename = '' } = event.data;
+	const { id, code, filename = '', files = [] } = event.data;
 	const startedAt = performance.now();
 	let stdout = '';
 	let stderr = '';
@@ -59,10 +107,17 @@ self.onmessage = async (
 		runtime.setStdout({ batched: (text) => (stdout += `${text}\n`) });
 		runtime.setStderr({ batched: (text) => (stderr += `${text}\n`) });
 		await runtime.loadPackagesFromImports(code);
+		const mounted = Object.fromEntries(
+			files.filter((file) => isSafeProjectPath(file.path)).map((file) => [file.path, file.content])
+		);
+		runtime.globals.set('__project_files', JSON.stringify(mounted));
+		runtime.globals.set('__project_entry', filename);
+		await runtime.runPythonAsync(MOUNT_PROJECT);
 
 		const makeDict = runtime.globals.get('dict');
 		globals = makeDict();
 		globals.set('__name__', '__main__');
+		if (filename && isSafeProjectPath(filename)) globals.set('__file__', `/workspace/${filename}`);
 		await runtime.runPythonAsync(code, filename ? { globals, filename } : { globals });
 
 		send({

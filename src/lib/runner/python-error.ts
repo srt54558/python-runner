@@ -5,6 +5,11 @@ function isRuntimeFrame(path: string): boolean {
 	return path.includes('/_pyodide/') || /(^|\/)pyodide\//.test(path);
 }
 
+function displayFramePath(path: string): string {
+	const prefix = '/workspace/';
+	return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
 function renameExec(line: string, filename: string): string {
 	if (!filename || /["\r\n]/.test(filename)) return line;
 	return line.replaceAll('"<exec>"', `"${filename}"`);
@@ -24,7 +29,10 @@ export function presentPythonError(raw: string, filename = ''): string {
 		const frame = FRAME.exec(line);
 		if (frame) {
 			skipping = isRuntimeFrame(frame[1]);
-			if (!skipping) kept.push(renameExec(line, filename));
+			if (!skipping) {
+				const shown = displayFramePath(frame[1]);
+				kept.push(renameExec(shown === frame[1] ? line : line.replace(frame[1], shown), filename));
+			}
 			continue;
 		}
 		if (skipping) {

@@ -13,6 +13,7 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';
 	import { parseWorkspaceArchive } from '$lib/workspace/archive';
+	import NewFileDialog from '$lib/components/new-file-dialog.svelte';
 	import {
 		createFile,
 		createFolder,
@@ -22,6 +23,7 @@
 		folderPath,
 		folderRows,
 		importFiles,
+		newFileNameError,
 		openFile,
 		renameFile,
 		renameFolder,
@@ -55,6 +57,7 @@
 		onsave?: (folderId: string) => void;
 	} = $props();
 
+	let createOpen = $state(false);
 	let picked = $state<{ token: number; fileId: string | null } | null>(null);
 	let deleteOpen = $state(false);
 	let pendingDelete = $state<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
@@ -98,13 +101,10 @@
 		if (created) renaming = { kind: 'folder', id: created.id, name: created.name };
 	}
 
-	function addFileHere() {
-		const next = createFile(snapshot, snapshot.selectedFolderId, 'datei');
+	function createNamed(name: string) {
+		const next = createFile(snapshot, snapshot.selectedFolderId, name);
 		const created = next.files.find((file) => !snapshot.files.some((existing) => existing.id === file.id));
-		if (created) {
-			pickFile(created.id);
-			renaming = { kind: 'file', id: created.id, name: created.name };
-		}
+		if (created) pickFile(created.id);
 		onchange(next);
 	}
 
@@ -122,6 +122,13 @@
 		const current = renaming;
 		renaming = null;
 		if (!current.name.trim()) return;
+		if (current.kind === 'file') {
+			const problem = newFileNameError(current.name);
+			if (problem) {
+				onnotice?.(problem);
+				return;
+			}
+		}
 		const next =
 			current.kind === 'folder'
 				? renameFolder(snapshot, current.id, current.name)
@@ -191,6 +198,7 @@
 		const incoming: { name: string; content: string }[] = [];
 		const skippedArchive: string[] = [];
 		const skippedFile: string[] = [];
+		const skippedType: string[] = [];
 		const archives: { name: string; snapshot: WorkspaceSnapshot }[] = [];
 		for (const file of chosen) {
 			if (file.size > ARCHIVE_IMPORT_LIMIT) {
@@ -203,6 +211,10 @@
 				archives.push({ name: file.name, snapshot: restored });
 				continue;
 			}
+			if (newFileNameError(file.name)) {
+				skippedType.push(file.name);
+				continue;
+			}
 			if (file.size > FILE_IMPORT_LIMIT) {
 				skippedFile.push(file.name);
 				continue;
@@ -212,6 +224,10 @@
 		const notes: string[] = [];
 		if (skippedArchive.length) notes.push(limitNote(skippedArchive, '20 MB'));
 		if (skippedFile.length) notes.push(limitNote(skippedFile, '1 MB'));
+		if (skippedType.length === 1) notes.push(`${skippedType[0]} hat ein Format, das nicht unterstützt wird.`);
+		else if (skippedType.length) {
+			notes.push(`${skippedType.length} Dateien haben ein Format, das nicht unterstützt wird.`);
+		}
 		if (archives.length) {
 			pendingRestore = {
 				name: archives[0].name,
@@ -287,7 +303,7 @@
 					bind:this={fileInput}
 					class="file-input"
 					type="file"
-					accept=".py,.pyw,.pyi,.txt,text/x-python,text/plain"
+					accept=".py,.pyw,.pyi,.html,.htm,.css,.js,.json,.xml,.txt,.md,text/plain,text/html,text/css,text/javascript,application/json,application/xml,text/markdown"
 					multiple
 					onchange={(event) => void importChosen(event)}
 				/>
@@ -371,7 +387,7 @@
 							class="add-btn"
 							aria-label="Neue Datei"
 							title="Neue Datei"
-							onclick={addFileHere}
+							onclick={() => (createOpen = true)}
 						>
 							<FilePlus />
 						</button>
@@ -477,6 +493,8 @@
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<NewFileDialog bind:open={createOpen} oncreate={createNamed} />
 
 <style>
 	.explorer-header,

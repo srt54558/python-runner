@@ -1,5 +1,5 @@
 import type { Diagnostic } from '@codemirror/lint';
-import type { RuffDiagnostic } from '$lib/runner/protocol';
+import { isDiagnosticError, type RuffDiagnostic } from '$lib/runner/protocol';
 
 export function positionToOffset(doc: string, row: number, column: number): number {
 	const lines = doc.split('\n');
@@ -14,13 +14,15 @@ export function diagnosticsForDocument(doc: string, items: readonly RuffDiagnost
 	return items.map((item) => {
 		const fromStart = positionToOffset(doc, item.start_location.row, item.start_location.column);
 		let from = fromStart;
+		const lineEnd = positionToOffset(doc, item.start_location.row, Number.MAX_SAFE_INTEGER);
 		let to = positionToOffset(doc, item.end_location.row, item.end_location.column);
+		if (to > lineEnd) to = lineEnd;
 		if (to <= from) {
 			if (from >= doc.length && from > 0) from -= 1;
 			to = Math.min(doc.length, from + 1);
 		}
 		const code = item.code ?? 'Syntax';
-		const severity = !item.code || item.code.startsWith('E9') ? 'error' : 'warning';
+		const severity = isDiagnosticError(item.code) ? 'error' : 'warning';
 		return {
 			from,
 			to,
