@@ -1,0 +1,18 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "python-runner",
+	"compatibility_date": "2026-09-22",
+	// Bewusst kein "main" und kein assets.binding: reines Static-Asset-Deployment.
+	// Anfragen werden vom Asset-Router beantwortet und nicht als Worker-Skript ausgeführt.
+	// Statische Asset-Anfragen sind bei Cloudflare kostenlos und unbegrenzt.
+	"assets": {
+		"directory": "./build",
+		"not_found_handling": "single-page-application"
+	},
+	"routes": [
+		{
+			"pattern": "python.k-plus.one",
+			"custom_domain": true
+		}
+	]
+}
