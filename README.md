@@ -9,7 +9,7 @@ Die Seite ist eine statische Website. Cloudflare liefert nur Dateien aus und fü
 - Python-Code schreiben, mit Einrückung nach einem Block wie `if hi:`
 - den Code im Browser ausführen und mit Ruff prüfen
 - Dateien und Ordner anlegen; sie bleiben in IndexedDB in diesem Browser
-- den gesamten Workspace als `python-workspace.json` herunterladen
+- den gesamten Workspace als `python-workspace.py` herunterladen; der Import ersetzt die Datenbank nach einer Rückfrage
 - einen Dateiinhalt als Link teilen
 - vor dem Schließen warnen, solange eine Änderung noch nicht gespeichert ist
 
@@ -21,9 +21,9 @@ Die Seite ist eine statische Website. Cloudflare liefert nur Dateien aus und fü
 
 Ein eigenes Worker-Skript würde Anfragen abrechenbar machen. Deshalb bleibt die Konfiguration ohne `main`.
 
-Der Browser lädt die Python-Laufzeit einmalig von jsDelivr (`cdn.jsdelivr.net`, Pyodide 314.0.7). Das ist ein Abruf im Browser, kein Aufruf eines Cloudflare-Workers. Ruff läuft als WebAssembly, das mit der Seite ausgeliefert wird. Python-Code und Dateien werden nicht an einen Anwendungsserver gesendet.
+Die Python-Laufzeit (Pyodide 314.0.7, inklusive Standardbibliothek) liegt unter `/pyodide/` und wird mit der Seite ausgeliefert. Ruff ebenfalls. Beides ist ein Abruf derselben Website, kein Aufruf eines Cloudflare-Workers. Python-Code und Dateien werden nicht an einen Anwendungsserver gesendet.
 
-Pyodide kann die Standardbibliothek und passende Pakete laden. Im Browser fehlen normale Prozesse und native Threads. Der erste Start braucht eine Netzwerkverbindung, damit die Laufzeit geladen werden kann. Ein Lauf endet nach 15 Sekunden oder beim Stopp; der Python-Worker wird danach neu aufgebaut.
+Im Browser fehlen normale Prozesse und native Threads. Ein Lauf endet nach 15 Sekunden oder beim Stopp; der Python-Worker wird danach neu aufgebaut.
 
 ## Teilen
 

@@ -78,13 +78,17 @@ export function isPythonFile(name: string): boolean {
 }
 
 export function uniqueName(existing: string[], requested: string): string {
-	if (!existing.includes(requested)) return requested;
+	const key = (name: string) => name.toLocaleLowerCase('de');
+	const taken = new Set(existing.map(key));
+	if (!taken.has(key(requested))) return requested;
 	const dot = requested.lastIndexOf('.');
 	const stem = dot > 0 ? requested.slice(0, dot) : requested;
 	const extension = dot > 0 ? requested.slice(dot) : '';
-	let suffix = 2;
-	while (existing.includes(`${stem} ${suffix}${extension}`)) suffix += 1;
-	return `${stem} ${suffix}${extension}`;
+	const numbered = /^(.*) \((\d+)\)$/u.exec(stem);
+	const base = numbered?.[1] ?? stem;
+	let suffix = numbered ? Number(numbered[2]) + 1 : 2;
+	while (taken.has(key(`${base} (${suffix})${extension}`))) suffix += 1;
+	return `${base} (${suffix})${extension}`;
 }
 
 export function folderPath(folders: WorkspaceFolder[], folderId: string): string {
@@ -129,18 +133,6 @@ export function sanitizeWorkspace(value: WorkspaceSnapshot): WorkspaceSnapshot {
 			terminalCollapsed: Boolean(value.layout?.terminalCollapsed)
 		}
 	};
-}
-
-export function workspaceExport(snapshot: WorkspaceSnapshot): string {
-	return JSON.stringify(
-		{
-			exportedAt: new Date().toISOString(),
-			application: 'python.k-plus.one',
-			workspace: snapshot
-		},
-		null,
-		2
-	);
 }
 
 export interface FolderRow {
@@ -266,6 +258,29 @@ export function createFolder(
 	const name = uniqueName(siblingFolderNames(snapshot, parentId), normalizeName(rawName) || 'Ordner');
 	const folder: WorkspaceFolder = { id: createId('folder'), name, parentId };
 	return { ...snapshot, folders: [...snapshot.folders, folder], selectedFolderId: folder.id };
+}
+
+export function importFiles(
+	snapshot: WorkspaceSnapshot,
+	folderId: string,
+	incoming: { name: string; content: string }[]
+): WorkspaceSnapshot {
+	if (!incoming.length || !snapshot.folders.some((folder) => folder.id === folderId)) return snapshot;
+	let next = snapshot;
+	let lastId = '';
+	for (const item of incoming) {
+		const name = uniqueName(siblingFileNames(next, folderId), fileNameFromInput(item.name));
+		const file: WorkspaceFile = {
+			id: createId('file'),
+			name,
+			folderId,
+			content: item.content,
+			updatedAt: Date.now()
+		};
+		next = { ...next, files: [...next.files, file], selectedFolderId: folderId };
+		lastId = file.id;
+	}
+	return openFile(next, lastId);
 }
 
 export function createFile(

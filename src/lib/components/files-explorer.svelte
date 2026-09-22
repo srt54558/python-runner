@@ -1,16 +1,18 @@
 <script lang="ts">
 	import Download from '@lucide/svelte/icons/download';
 	import FileCode from '@lucide/svelte/icons/file-code';
+	import FileDown from '@lucide/svelte/icons/file-down';
 	import FilePlus from '@lucide/svelte/icons/file-plus';
 	import Folder from '@lucide/svelte/icons/folder';
-	import FolderPlus from '@lucide/svelte/icons/folder-plus';
 	import Pencil from '@lucide/svelte/icons/pencil';
+	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Upload from '@lucide/svelte/icons/upload';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import { Input } from '$lib/components/ui/input/index.js';
 	import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';
+	import { parseWorkspaceArchive } from '$lib/workspace/archive';
 	import {
 		createFile,
 		createFolder,
@@ -19,6 +21,7 @@
 		filesInFolder,
 		folderPath,
 		folderRows,
+		importFiles,
 		openFile,
 		renameFile,
 		renameFolder,
@@ -29,13 +32,18 @@
 		type WorkspaceSnapshot
 	} from '$lib/workspace/model';
 
+	const FILE_IMPORT_LIMIT = 1_000_000;
+	const ARCHIVE_IMPORT_LIMIT = 20_000_000;
+
 	let {
 		open = $bindable(false),
 		openedToken = 0,
 		snapshot,
 		onchange,
 		ondownload,
-		onnotice
+		onnotice,
+		onrestore,
+		onsave
 	}: {
 		open?: boolean;
 		openedToken?: number;
@@ -43,13 +51,19 @@
 		onchange: (next: WorkspaceSnapshot) => void;
 		ondownload: () => void;
 		onnotice?: (message: string) => void;
+		onrestore?: () => void;
+		onsave?: (folderId: string) => void;
 	} = $props();
 
-	let draft = $state('');
 	let picked = $state<{ token: number; fileId: string | null } | null>(null);
 	let deleteOpen = $state(false);
 	let pendingDelete = $state<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
 	let renaming = $state<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
+	let fileInput = $state<HTMLInputElement | null>(null);
+	let restoreOpen = $state(false);
+	let pendingRestore = $state<{ name: string; snapshot: WorkspaceSnapshot; ignored: number } | null>(
+		null
+	);
 
 	const rows = $derived(folderRows(snapshot.folders));
 	const visibleFiles = $derived(filesInFolder(snapshot, snapshot.selectedFolderId));
@@ -75,17 +89,22 @@
 		onchange(selectFolder(snapshot, folderId));
 	}
 
-	function addFolder() {
-		pickFile(null);
-		onchange(createFolder(snapshot, snapshot.selectedFolderId, draft));
-		draft = '';
+	function addChildFolder(parentId: string) {
+		const next = createFolder(snapshot, parentId, 'Ordner');
+		const created = next.folders.find(
+			(folder) => !snapshot.folders.some((existing) => existing.id === folder.id)
+		);
+		onchange(next);
+		if (created) renaming = { kind: 'folder', id: created.id, name: created.name };
 	}
 
-	function addFile() {
-		const next = createFile(snapshot, snapshot.selectedFolderId, draft);
+	function addFileHere() {
+		const next = createFile(snapshot, snapshot.selectedFolderId, 'datei');
 		const created = next.files.find((file) => !snapshot.files.some((existing) => existing.id === file.id));
-		draft = '';
-		pickFile(created?.id ?? null);
+		if (created) {
+			pickFile(created.id);
+			renaming = { kind: 'file', id: created.id, name: created.name };
+		}
 		onchange(next);
 	}
 
@@ -139,6 +158,89 @@
 		deleteOpen = true;
 	}
 
+	function downloadText(name: string, content: string) {
+		const blobUrl = URL.createObjectURL(new Blob([content], { type: 'text/x-python;charset=utf-8' }));
+		const link = document.createElement('a');
+		link.href = blobUrl;
+		link.download = name;
+		link.click();
+		URL.revokeObjectURL(blobUrl);
+	}
+
+	function exportFiles() {
+		const selected = visibleFiles.find((file) => file.id === selectedFileId);
+		const files = selected ? [selected] : visibleFiles;
+		if (!files.length) {
+			onnotice?.('In diesem Ordner gibt es keine Datei zum Export.');
+			return;
+		}
+		for (const file of files) downloadText(file.name, file.content);
+		onnotice?.(files.length === 1 ? `${files[0].name} exportiert` : `${files.length} Dateien exportiert`);
+	}
+
+	function limitNote(names: string[], limit: string): string {
+		if (names.length === 1) return `${names[0]} ist größer als ${limit} und wurde übersprungen.`;
+		return `${names.length} Dateien über ${limit} wurden übersprungen.`;
+	}
+
+	async function importChosen(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const chosen = [...(input.files ?? [])];
+		input.value = '';
+		if (!chosen.length) return;
+		const incoming: { name: string; content: string }[] = [];
+		const skippedArchive: string[] = [];
+		const skippedFile: string[] = [];
+		const archives: { name: string; snapshot: WorkspaceSnapshot }[] = [];
+		for (const file of chosen) {
+			if (file.size > ARCHIVE_IMPORT_LIMIT) {
+				skippedArchive.push(file.name);
+				continue;
+			}
+			const content = await file.text();
+			const restored = parseWorkspaceArchive(content);
+			if (restored) {
+				archives.push({ name: file.name, snapshot: restored });
+				continue;
+			}
+			if (file.size > FILE_IMPORT_LIMIT) {
+				skippedFile.push(file.name);
+				continue;
+			}
+			incoming.push({ name: file.name, content });
+		}
+		const notes: string[] = [];
+		if (skippedArchive.length) notes.push(limitNote(skippedArchive, '20 MB'));
+		if (skippedFile.length) notes.push(limitNote(skippedFile, '1 MB'));
+		if (archives.length) {
+			pendingRestore = {
+				name: archives[0].name,
+				snapshot: archives[0].snapshot,
+				ignored: incoming.length + archives.length - 1
+			};
+			restoreOpen = true;
+			if (notes.length) onnotice?.(notes.join(' '));
+			return;
+		}
+		if (incoming.length) onchange(importFiles(snapshot, snapshot.selectedFolderId, incoming));
+		if (incoming.length === 1) notes.push(`${incoming[0].name} importiert`);
+		else if (incoming.length) notes.push(`${incoming.length} Dateien importiert`);
+		if (notes.length) onnotice?.(notes.join(' '));
+	}
+
+	function confirmRestore() {
+		const pending = pendingRestore;
+		pendingRestore = null;
+		restoreOpen = false;
+		if (!pending) return;
+		picked = null;
+		renaming = null;
+		onchange(pending.snapshot);
+		onrestore?.();
+		onnotice?.('Datenbank ersetzt. Die bisherigen Dateien wurden gelöscht.');
+		open = false;
+	}
+
 	function confirmDelete() {
 		if (!pendingDelete) return;
 		const next =
@@ -172,10 +274,32 @@
 			<div>
 				<Dialog.Title>Files</Dialog.Title>
 				<Dialog.Description class="mt-1 text-xs">
-					Ordner und Dateien bleiben in diesem Browser gespeichert.
+					{#if onsave}
+						Ordner wählen, dann hier speichern.
+					{:else}
+						Ordner und Dateien bleiben in diesem Browser gespeichert. Import und Export gelten für den
+						gewählten Ordner.
+					{/if}
 				</Dialog.Description>
 			</div>
-			<Button variant="outline" size="sm" onclick={ondownload}><Download /> Download DB</Button>
+			<div class="header-actions">
+				<input
+					bind:this={fileInput}
+					class="file-input"
+					type="file"
+					accept=".py,.pyw,.pyi,.txt,text/x-python,text/plain"
+					multiple
+					onchange={(event) => void importChosen(event)}
+				/>
+				<Button variant="outline" size="sm" onclick={() => fileInput?.click()}><Upload /> Import</Button>
+				<Button variant="outline" size="sm" onclick={exportFiles} disabled={visibleFiles.length === 0}
+					><FileDown /> Export</Button
+				>
+				<Button variant="outline" size="sm" onclick={ondownload}><Download /> Download DB</Button>
+				{#if onsave}
+					<Button size="sm" onclick={() => onsave(snapshot.selectedFolderId)}>Hier speichern</Button>
+				{/if}
+			</div>
 		</div>
 		<div class="explorer-panes">
 			<section class="pane" aria-label="Ordner">
@@ -208,6 +332,15 @@
 									<button
 										type="button"
 										class="icon-btn"
+										aria-label={`In ${row.folder.name} einen Ordner anlegen`}
+										title="Neuer Ordner"
+										onclick={() => addChildFolder(row.folder.id)}
+									>
+										<Plus />
+									</button>
+									<button
+										type="button"
+										class="icon-btn"
 										aria-label={`${row.folder.name} umbenennen`}
 										onclick={() => startRename('folder', row.folder.id, row.folder.name)}
 									>
@@ -232,12 +365,23 @@
 			<section class="pane" aria-label="Dateien">
 				<div class="pane-label files-label">
 					<span>{currentPath}</span>
-					<Button
-						variant="outline"
-						size="xs"
-						disabled={!selectedFileId}
-						onclick={() => selectedFileId && openSelected(selectedFileId)}>Öffnen</Button
-					>
+					<div class="file-actions">
+						<button
+							type="button"
+							class="add-btn"
+							aria-label="Neue Datei"
+							title="Neue Datei"
+							onclick={addFileHere}
+						>
+							<FilePlus />
+						</button>
+						<Button
+							variant="outline"
+							size="xs"
+							disabled={!selectedFileId}
+							onclick={() => selectedFileId && openSelected(selectedFileId)}>Öffnen</Button
+						>
+					</div>
 				</div>
 				<ScrollArea class="pane-scroll">
 					{#if visibleFiles.length === 0}
@@ -293,24 +437,27 @@
 				</ScrollArea>
 			</section>
 		</div>
-		<form
-			class="explorer-footer"
-			onsubmit={(event) => {
-				event.preventDefault();
-				addFile();
-			}}
-		>
-			<Input
-				bind:value={draft}
-				placeholder="Name"
-				aria-label="Name für neue Datei oder neuen Ordner"
-				autocomplete="off"
-			/>
-			<Button type="submit" variant="outline" size="sm"><FilePlus /> Datei</Button>
-			<Button type="button" variant="outline" size="sm" onclick={addFolder}><FolderPlus /> Ordner</Button>
-		</form>
 	</Dialog.Content>
 </Dialog.Root>
+
+<AlertDialog.Root bind:open={restoreOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Datenbank ersetzen?</AlertDialog.Title>
+			<AlertDialog.Description>
+				„{pendingRestore?.name}“ ersetzt die gesamte Datenbank. Alle Ordner und Dateien in diesem
+				Browser werden gelöscht.
+				{#if pendingRestore && pendingRestore.ignored > 0}
+					Die anderen ausgewählten Dateien werden dabei nicht importiert.
+				{/if}
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Abbrechen</AlertDialog.Cancel>
+			<AlertDialog.Action variant="destructive" onclick={confirmRestore}>Ersetzen</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
 
 <AlertDialog.Root bind:open={deleteOpen}>
 	<AlertDialog.Content>
@@ -333,8 +480,9 @@
 
 <style>
 	.explorer-header,
-	.explorer-footer,
 	.files-label,
+	.header-actions,
+	.file-actions,
 	.row {
 		display: flex;
 		align-items: center;
@@ -344,12 +492,36 @@
 		gap: 1rem;
 		padding: 1rem 3.2rem 0.9rem 1rem;
 	}
+	.header-actions {
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		gap: 0.4rem;
+	}
+	.file-input {
+		display: none;
+	}
 	.explorer-panes {
 		display: grid;
 		grid-template-columns: minmax(13rem, 0.85fr) minmax(0, 1.15fr);
 		height: min(26rem, calc(100svh - 12rem));
 		min-height: 16rem;
 		border-block: 1px solid var(--border);
+	}
+	@media (max-width: 899px) {
+		.explorer-header {
+			flex-direction: column;
+			align-items: stretch;
+			padding-right: 2.6rem;
+		}
+		.header-actions {
+			justify-content: flex-start;
+		}
+		.explorer-panes {
+			grid-template-columns: 1fr;
+			grid-template-rows: minmax(6.5rem, 0.72fr) minmax(0, 1fr);
+			height: min(68svh, 32rem);
+			min-height: 0;
+		}
 	}
 	.pane {
 		display: grid;
@@ -359,6 +531,12 @@
 	}
 	.pane + .pane {
 		border-left: 1px solid var(--border);
+	}
+	@media (max-width: 899px) {
+		.pane + .pane {
+			border-left: 0;
+			border-top: 1px solid var(--border);
+		}
 	}
 	.pane-label {
 		margin: 0;
@@ -381,6 +559,24 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	.file-actions {
+		flex: 0 0 auto;
+		gap: 0.35rem;
+	}
+	.add-btn {
+		display: grid;
+		width: 1.55rem;
+		height: 1.55rem;
+		place-items: center;
+		border: 1px solid var(--border);
+		border-radius: 0.35rem;
+		background: var(--background);
+		color: var(--foreground);
+		cursor: pointer;
+	}
+	.add-btn:hover {
+		background: var(--accent);
+	}
 	:global(.pane-scroll) {
 		height: 100%;
 		min-height: 0;
@@ -392,7 +588,7 @@
 	}
 	li {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto auto;
+		grid-template-columns: minmax(0, 1fr) auto auto auto;
 		align-items: center;
 		min-height: 2rem;
 		border-radius: 0.4rem;
@@ -475,15 +671,8 @@
 		color: var(--muted-foreground);
 		font-size: 0.78rem;
 	}
-	.explorer-footer {
-		gap: 0.45rem;
-		padding: 0.75rem;
-	}
-	.explorer-footer :global(input) {
-		flex: 1;
-		font-family: var(--font-code);
-	}
-	:global(.icon-btn svg) {
+	:global(.icon-btn svg),
+	:global(.add-btn svg) {
 		width: 0.85rem;
 		height: 0.85rem;
 	}

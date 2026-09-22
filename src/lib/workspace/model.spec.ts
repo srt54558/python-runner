@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
 	contentSignature,
 	createFile,
@@ -9,18 +9,19 @@ import {
 	folderPath,
 	folderRows,
 	hasUnsavedChanges,
+	importFiles,
 	isPythonFile,
 	normalizeFileName,
 	ROOT_FOLDER_ID,
 	uniqueName,
-	updateFileContent,
-	workspaceExport
+	updateFileContent
 } from './model';
 
 describe('workspace model', () => {
 	it('normalizes paths and creates unique file names', () => {
 		expect(normalizeFileName('  src/test.py ')).toBe('src-test.py');
-		expect(uniqueName(['test.py', 'test 2.py'], 'test.py')).toBe('test 3.py');
+		expect(uniqueName(['test.py', 'test (2).py'], 'test.py')).toBe('test (3).py');
+		expect(uniqueName(['Main.py'], 'main.py')).toBe('main (2).py');
 		expect(isPythonFile('MAIN.PY')).toBe(true);
 	});
 
@@ -36,15 +37,6 @@ describe('workspace model', () => {
 		).toBe('Projekt/src');
 	});
 
-	it('exports the complete workspace as readable JSON', () => {
-		vi.stubGlobal('crypto', { randomUUID: () => 'test-id' });
-		const workspace = createInitialWorkspace('print(42)');
-		const exported = JSON.parse(workspaceExport(workspace));
-		expect(exported.application).toBe('python.k-plus.one');
-		expect(exported.workspace.files[0].content).toBe('print(42)');
-		vi.unstubAllGlobals();
-	});
-
 	it('keeps folders on the left model and files inside the selected folder', () => {
 		const initial = createInitialWorkspace('print(1)');
 		const withFolder = createFolder(initial, ROOT_FOLDER_ID, 'src');
@@ -57,7 +49,7 @@ describe('workspace model', () => {
 		expect(withFile.files.find((file) => file.name === 'hi.py')?.folderId).toBe(folder?.id);
 		expect(withFile.activeFileId).toBe(withFile.files.find((file) => file.name === 'hi.py')?.id);
 		expect(createFile(initial, ROOT_FOLDER_ID, 'main.py').files.map((file) => file.name).sort()).toEqual([
-			'main 2.py',
+			'main (2).py',
 			'main.py'
 		]);
 	});
@@ -71,5 +63,18 @@ describe('workspace model', () => {
 		expect(hasUnsavedChanges(edited, saved)).toBe(true);
 		expect(hasUnsavedChanges(initial, saved)).toBe(false);
 		expect(updateFileContent(initial, initial.files[0].id, 'print(1)')).toBe(initial);
+	});
+
+	it('imports files into the selected folder and keeps both copies when names collide', () => {
+		const initial = createInitialWorkspace('print(1)');
+		const next = importFiles(initial, ROOT_FOLDER_ID, [
+			{ name: 'hi.py', content: 'print(2)' },
+			{ name: 'hi.py', content: 'print(3)' }
+		]);
+		expect(next.files.map((file) => file.name).sort()).toEqual(['hi (2).py', 'hi.py', 'main.py']);
+		expect(next.files.find((file) => file.name === 'hi.py')?.content).toBe('print(2)');
+		expect(next.files.find((file) => file.name === 'hi (2).py')?.content).toBe('print(3)');
+		expect(next.activeFileId).toBe(next.files.find((file) => file.name === 'hi (2).py')?.id);
+		expect(importFiles(initial, 'missing', [{ name: 'a.py', content: '' }])).toBe(initial);
 	});
 });

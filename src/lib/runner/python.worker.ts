@@ -1,14 +1,16 @@
 /// <reference lib="webworker" />
 
+import { presentPythonError } from './python-error';
 import type { PythonWorkerMessage } from './protocol';
-
-const PYODIDE_VERSION = '314.0.7';
-const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+import { PYODIDE_BASE } from './pyodide-runtime';
 
 interface PyodideRuntime {
 	loadPackagesFromImports(code: string): Promise<void>;
 	runPython(code: string): unknown;
-	runPythonAsync(code: string, options?: { globals?: unknown }): Promise<unknown>;
+	runPythonAsync(
+		code: string,
+		options?: { globals?: unknown; filename?: string }
+	): Promise<unknown>;
 	setStdout(options: { batched: (text: string) => void }): void;
 	setStderr(options: { batched: (text: string) => void }): void;
 	globals: { get(name: string): (...args: unknown[]) => PyProxy };
@@ -40,10 +42,12 @@ const runtimePromise = (async () => {
 	throw error;
 });
 
-self.onmessage = async (event: MessageEvent<{ type: 'run'; id: number; code: string }>) => {
+self.onmessage = async (
+	event: MessageEvent<{ type: 'run'; id: number; code: string; filename?: string }>
+) => {
 	if (event.data.type !== 'run') return;
 
-	const { id, code } = event.data;
+	const { id, code, filename = '' } = event.data;
 	const startedAt = performance.now();
 	let stdout = '';
 	let stderr = '';
@@ -59,7 +63,7 @@ self.onmessage = async (event: MessageEvent<{ type: 'run'; id: number; code: str
 		const makeDict = runtime.globals.get('dict');
 		globals = makeDict();
 		globals.set('__name__', '__main__');
-		await runtime.runPythonAsync(code, { globals });
+		await runtime.runPythonAsync(code, filename ? { globals, filename } : { globals });
 
 		send({
 			type: 'result',
@@ -72,7 +76,7 @@ self.onmessage = async (event: MessageEvent<{ type: 'run'; id: number; code: str
 		send({
 			type: 'error',
 			id,
-			error: error instanceof Error ? error.message : String(error),
+			error: presentPythonError(error instanceof Error ? error.message : String(error), filename),
 			durationMs: performance.now() - startedAt
 		});
 	} finally {

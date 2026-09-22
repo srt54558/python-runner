@@ -22,3 +22,6 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Copied from node_modules/pyodide when the dev server or build starts.
+/static/pyodide/
