@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import Menu from '@lucide/svelte/icons/menu';
 	import X from '@lucide/svelte/icons/x';
+	import LazyExample from './lazy-example.svelte';
 	import { lessonMatches, type Lesson } from './lessons';
 
 	let {
@@ -9,19 +10,32 @@
 		lead,
 		lessons,
 		example,
-		embedded = false
+		embedded = false,
+		focusId = ''
 	}: {
 		title: string;
 		lead: string;
 		lessons: Lesson[];
 		example: Snippet<[Lesson]>;
 		embedded?: boolean;
+		focusId?: string;
 	} = $props();
 
 	let query = $state('');
 	let menuOpen = $state(false);
+	let revealed = $state('');
 
 	const visible = $derived(lessons.filter((lesson) => lessonMatches(lesson, query)));
+	const eagerAll = $derived(visible.length <= 8);
+
+	$effect(() => {
+		const id = focusId;
+		if (!id) return;
+		const timer = window.setTimeout(() => {
+			document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+		}, 60);
+		return () => window.clearTimeout(timer);
+	});
 
 	function toggleMenu() {
 		menuOpen = !menuOpen;
@@ -33,6 +47,7 @@
 
 	function showLesson(id: string) {
 		menuOpen = false;
+		revealed = id;
 		document.getElementById(id)?.scrollIntoView({ block: 'start' });
 	}
 </script>
@@ -44,13 +59,19 @@
 />
 
 <div class="docs" class:embedded>
-	<header class="intro">
-		<p class="kicker">K+ Coder</p>
-		<h1>{title}</h1>
-		<p class="lead">{lead}</p>
-	</header>
+	{#if !embedded}
+		<header class="intro">
+			<p class="kicker">K+ Coder</p>
+			<h1>{title}</h1>
+			<p class="lead">{lead}</p>
+		</header>
+	{/if}
 	{#if menuOpen}
-		<button type="button" class="backdrop" aria-label="Inhalt schließen" onclick={() => (menuOpen = false)}
+		<button
+			type="button"
+			class="backdrop"
+			aria-label="Inhalt schließen"
+			onclick={() => (menuOpen = false)}
 		></button>
 	{/if}
 	<div class="toolbar">
@@ -77,13 +98,7 @@
 	</div>
 	<div class="layout">
 		{#if menuOpen}
-			<nav
-				id="docs-inhalt"
-				class="menu"
-				aria-label="Inhalt"
-				tabindex="-1"
-				{@attach focusMenu}
-			>
+			<nav id="docs-inhalt" class="menu" aria-label="Inhalt" tabindex="-1" {@attach focusMenu}>
 				{@render contents()}
 			</nav>
 		{/if}
@@ -98,13 +113,15 @@
 				</div>
 			{:else}
 				{#each visible as lesson, index (lesson.id)}
-					<section id={lesson.id}>
+					<section id={lesson.id} class:focused={lesson.id === focusId}>
 						{#if index === 0 || visible[index - 1].group !== lesson.group}
 							<p class="group">{lesson.group}</p>
 						{/if}
 						<h2>{lesson.title}</h2>
 						<p>{lesson.text}</p>
-						{@render example(lesson)}
+						<LazyExample eager={eagerAll || lesson.id === focusId || lesson.id === revealed}>
+							{@render example(lesson)}
+						</LazyExample>
 					</section>
 				{/each}
 			{/if}
@@ -328,6 +345,13 @@
 		padding: 1.15rem 0 1.35rem;
 		border-bottom: 1px solid var(--border);
 	}
+	section.focused {
+		border-radius: 0.55rem;
+		background: color-mix(in oklch, var(--accent) 80%, var(--background));
+		box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--foreground) 28%, var(--border));
+		padding-inline: 0.7rem;
+		margin-inline: -0.7rem;
+	}
 	section:first-child {
 		padding-top: 0.2rem;
 	}
@@ -380,16 +404,12 @@
 		flex-direction: column;
 		overflow: hidden;
 	}
-	.docs.embedded .intro {
-		flex: none;
-		padding-right: 3.25rem;
-	}
 	.docs.embedded .toolbar {
 		position: static;
 		flex: none;
 	}
 	.docs.embedded .toolbar-inner {
-		padding-right: var(--docs-gutter);
+		padding-right: 3.25rem;
 	}
 	.docs.embedded .layout {
 		flex: 1 1 auto;

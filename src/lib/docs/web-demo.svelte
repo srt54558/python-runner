@@ -12,6 +12,7 @@
 	import { renderDocumentPreview } from '$lib/editor/document-preview';
 	import { previewDocument, readPreviewMessage } from '$lib/editor/preview';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { clipBlocks } from '$lib/runner/limits';
 	import { isHtmlFile } from '$lib/workspace/model';
 
 	let { code, filename }: { code: string; filename?: string } = $props();
@@ -28,7 +29,7 @@
 	function onMessage(event: MessageEvent) {
 		const message = readPreviewMessage(event.data, token);
 		if (!message) return;
-		logs = [...logs, message];
+		logs = clipBlocks([...logs, message]);
 	}
 
 	function publish(source: string) {
@@ -73,17 +74,14 @@
 		{@attach (node) => node.setAttribute('autocorrect', 'off')}
 		aria-label="Beispiel"
 		value={draft}
-		oninput={onInput}
-	></textarea>
+		oninput={onInput}></textarea>
 	{#if doc}
-		{#key doc}
-			<iframe
-				title="Vorschau"
-				sandbox="allow-scripts allow-forms allow-popups allow-modals"
-				referrerpolicy="no-referrer"
-				srcdoc={doc}
-			></iframe>
-		{/key}
+		<iframe
+			title="Vorschau"
+			sandbox="allow-scripts allow-forms allow-popups allow-modals"
+			referrerpolicy="no-referrer"
+			srcdoc={doc}
+		></iframe>
 	{/if}
 	{#if logs.length}
 		<div class="demo-logs">
@@ -116,7 +114,9 @@
 		color: var(--foreground);
 		font: 400 0.82rem/1.55 var(--font-code);
 		font-variant-ligatures: contextual;
-		font-feature-settings: 'calt' 1, 'liga' 1;
+		font-feature-settings:
+			'calt' 1,
+			'liga' 1;
 		field-sizing: fixed;
 		max-width: 100%;
 		min-width: 0;

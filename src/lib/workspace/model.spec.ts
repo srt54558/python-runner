@@ -19,6 +19,7 @@ import {
 	renameFile,
 	ROOT_FOLDER_ID,
 	sanitizeWorkspace,
+	structureSignature,
 	uniqueName,
 	updateFileContent
 } from './model';
@@ -83,10 +84,21 @@ describe('workspace model', () => {
 		const withFile = createFile(withFolder, folder?.id ?? '', 'hi.py');
 		expect(withFile.files.find((file) => file.name === 'hi.py')?.folderId).toBe(folder?.id);
 		expect(withFile.activeFileId).toBe(withFile.files.find((file) => file.name === 'hi.py')?.id);
-		expect(createFile(initial, ROOT_FOLDER_ID, 'main.py').files.map((file) => file.name).sort()).toEqual([
-			'main (2).py',
-			'main.py'
+		expect(
+			createFile(initial, ROOT_FOLDER_ID, 'main.py')
+				.files.map((file) => file.name)
+				.sort()
+		).toEqual(['main (2).py', 'main.py']);
+		const beside = createFolder(initial, null, 'Übungen');
+		expect(folderRows(beside.folders).map((row) => `${row.depth}:${row.folder.name}`)).toEqual([
+			'0:Projekt',
+			'0:Übungen'
 		]);
+		const extra = beside.folders.find((item) => item.name === 'Übungen');
+		const extraFile = createFile(beside, extra?.id ?? '', 'aufgabe.py', 'print(2)');
+		const aufgabe = extraFile.files.find((file) => file.name === 'aufgabe.py');
+		expect(aufgabe ? projectFilePath(extraFile, aufgabe) : '').toBe('Übungen/aufgabe.py');
+		expect(createFolder(initial, 'missing', 'src')).toBe(initial);
 	});
 
 	it('refuses to delete the root folder or the last file and tracks unsaved edits', () => {
@@ -97,6 +109,10 @@ describe('workspace model', () => {
 		const edited = updateFileContent(initial, initial.files[0].id, 'print(2)');
 		expect(hasUnsavedChanges(edited, saved)).toBe(true);
 		expect(hasUnsavedChanges(initial, saved)).toBe(false);
+		const contents = Object.fromEntries(initial.files.map((file) => [file.id, file.content]));
+		const structure = structureSignature(initial);
+		expect(hasUnsavedChanges(edited, structure, contents)).toBe(true);
+		expect(hasUnsavedChanges(initial, structure, contents)).toBe(false);
 		expect(updateFileContent(initial, initial.files[0].id, 'print(1)')).toBe(initial);
 	});
 

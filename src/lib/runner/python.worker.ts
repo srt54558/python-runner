@@ -1,8 +1,10 @@
 /// <reference lib="webworker" />
 
+import { clipText } from './limits';
 import { presentPythonError } from './python-error';
 import type { PythonWorkerMessage } from './protocol';
 import { PYODIDE_BASE } from './pyodide-runtime';
+import { diffProjectFiles, isSafeProjectPath } from './project-files';
 
 interface PyodideRuntime {
 	loadPackagesFromImports(code: string): Promise<void>;
@@ -48,14 +50,16 @@ const runtimePromise = (async () => {
 });
 
 const MOUNT_PROJECT = `
-import json, os, shutil, sys
-os.chdir("/")
+import json, os, sys
 root = "/workspace"
-if os.path.isdir(root):
-    shutil.rmtree(root)
-os.makedirs(root)
-files = json.loads(__project_files)
-for path, content in files.items():
+os.makedirs(root, exist_ok=True)
+writes = json.loads(__project_writes)
+deletes = json.loads(__project_deletes)
+for path in deletes:
+    full = os.path.join(root, *str(path).split("/"))
+    if os.path.isfile(full):
+        os.remove(full)
+for path, content in writes.items():
     parts = str(path).split("/")
     if not parts or any(part in ("", ".", "..") for part in parts):
         continue
@@ -65,9 +69,11 @@ for path, content in files.items():
         os.makedirs(folder, exist_ok=True)
     with open(os.path.join(root, *parts), "w", encoding="utf-8") as handle:
         handle.write(content)
-os.chdir(root)
 entry = str(__project_entry or "")
 script_dir = os.path.dirname(os.path.join(root, entry)) or root
+if not os.path.isdir(script_dir):
+    script_dir = root
+os.chdir(script_dir)
 sys.path[:] = [item for item in sys.path if not (isinstance(item, str) and (item == root or item.startswith(root + "/")))]
 sys.path.insert(0, script_dir)
 for name in list(sys.modules):
@@ -75,14 +81,12 @@ for name in list(sys.modules):
     module_file = getattr(module, "__file__", None)
     if isinstance(module_file, str) and (module_file == root or module_file.startswith(root + "/")):
         del sys.modules[name]
-del __project_files
+del __project_writes
+del __project_deletes
 del __project_entry
 `;
 
-function isSafeProjectPath(path: string): boolean {
-	if (!path || path.startsWith('/') || path.includes('\\') || path.includes('\0')) return false;
-	return path.split('/').every((part) => part !== '' && part !== '.' && part !== '..');
-}
+const mounted = new Map<string, string>();
 
 self.onmessage = async (
 	event: MessageEvent<{
@@ -104,13 +108,29 @@ self.onmessage = async (
 	try {
 		const runtime = await runtimePromise;
 		send({ type: 'status', status: 'running' });
-		runtime.setStdout({ batched: (text) => (stdout += `${text}\n`) });
-		runtime.setStderr({ batched: (text) => (stderr += `${text}\n`) });
+		runtime.setStdout({
+			batched: (text) => {
+				const chunk = `${text}\n`;
+				stdout = clipText(stdout + chunk);
+				send({ type: 'output', id, stream: 'stdout', text: chunk });
+			}
+		});
+		runtime.setStderr({
+			batched: (text) => {
+				const chunk = `${text}\n`;
+				stderr = clipText(stderr + chunk);
+				send({ type: 'output', id, stream: 'stderr', text: chunk });
+			}
+		});
 		await runtime.loadPackagesFromImports(code);
-		const mounted = Object.fromEntries(
+		const next = Object.fromEntries(
 			files.filter((file) => isSafeProjectPath(file.path)).map((file) => [file.path, file.content])
 		);
-		runtime.globals.set('__project_files', JSON.stringify(mounted));
+		const { writes, deletes } = diffProjectFiles(mounted, next);
+		mounted.clear();
+		for (const [path, content] of Object.entries(next)) mounted.set(path, content);
+		runtime.globals.set('__project_writes', JSON.stringify(writes));
+		runtime.globals.set('__project_deletes', JSON.stringify(deletes));
 		runtime.globals.set('__project_entry', filename);
 		await runtime.runPythonAsync(MOUNT_PROJECT);
 

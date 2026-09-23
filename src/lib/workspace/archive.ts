@@ -9,7 +9,7 @@ const RESTORE_PROGRAM = `#!/usr/bin/env python3
 """Workspace von python.k-plus.one.
 
 Im Terminal ausführen und mit y bestätigen, um alle Ordner und Dateien
-neben dieser Datei anzulegen. In der App über Import laden, um die
+neben dieser Datei anzulegen. In der App über Importieren laden, um die
 gespeicherte Datenbank zu ersetzen.
 """
 
@@ -54,6 +54,11 @@ def folder_parts(folders: list, folder_id: object) -> list[str] | None:
         seen.add(current.get("id"))
         parent_id = current.get("parentId")
         if not parent_id:
+            if current.get("id") != "root":
+                part = safe_part(current.get("name"))
+                if part is None:
+                    return None
+                parts.append(part)
             return list(reversed(parts))
         part = safe_part(current.get("name"))
         parent = by_id.get(parent_id)
@@ -76,7 +81,7 @@ def restore(workspace: dict, destination: Path, script: Path) -> int:
     if not isinstance(folders, list) or not isinstance(files, list):
         raise ValueError("Workspace ist unvollständig")
     for folder in folders:
-        if not isinstance(folder, dict) or not folder.get("parentId"):
+        if not isinstance(folder, dict) or folder.get("id") == "root":
             continue
         parts = folder_parts(folders, folder.get("id"))
         if not parts:

@@ -93,14 +93,7 @@ const SUPPORTED_EXTENSIONS = new Set([
 ]);
 
 export type CodeLanguage =
-	| 'python'
-	| 'html'
-	| 'javascript'
-	| 'css'
-	| 'json'
-	| 'xml'
-	| 'markdown'
-	| 'text';
+	'python' | 'html' | 'javascript' | 'css' | 'json' | 'xml' | 'markdown' | 'text';
 
 export function fileExtension(name: string): string {
 	const base = name.trim().split(/[\\/]/u).pop() ?? '';
@@ -217,7 +210,10 @@ export const WELCOME_LANGUAGES = [
 
 export type WelcomeLanguage = (typeof WELCOME_LANGUAGES)[number];
 
-export const WELCOME_FILES: Record<WelcomeLanguage, { name: string; label: string; content: string }> = {
+export const WELCOME_FILES: Record<
+	WelcomeLanguage,
+	{ name: string; label: string; content: string }
+> = {
 	python: { name: 'main.py', label: 'Python', content: STARTER_CODE },
 	html: { name: 'seite.html', label: 'HTML', content: HTML_STARTER },
 	css: { name: 'style.css', label: 'CSS', content: 'body {\n    font-family: sans-serif;\n}\n' },
@@ -284,10 +280,12 @@ export function projectDirectory(snapshot: WorkspaceSnapshot, folderId: string):
 	const parts: string[] = [];
 	const visited = new Set<string>();
 	let current = snapshot.folders.find((folder) => folder.id === folderId);
-	while (current && current.parentId && !visited.has(current.id)) {
+	while (current && !visited.has(current.id)) {
 		visited.add(current.id);
-		parts.unshift(current.name);
-		current = snapshot.folders.find((folder) => folder.id === current?.parentId);
+		if (current.parentId || current.id !== ROOT_FOLDER_ID) parts.unshift(current.name);
+		current = current.parentId
+			? snapshot.folders.find((folder) => folder.id === current?.parentId)
+			: undefined;
 	}
 	return parts.join('/');
 }
@@ -340,15 +338,34 @@ export interface FolderRow {
 	depth: number;
 }
 
-export function contentSignature(snapshot: WorkspaceSnapshot): string {
+export function structureSignature(snapshot: WorkspaceSnapshot): string {
 	return JSON.stringify({
 		folders: snapshot.folders.map(({ id, name, parentId }) => ({ id, name, parentId })),
-		files: snapshot.files.map(({ id, name, folderId, content }) => ({ id, name, folderId, content }))
+		files: snapshot.files.map(({ id, name, folderId }) => ({ id, name, folderId }))
 	});
 }
 
-export function hasUnsavedChanges(snapshot: WorkspaceSnapshot, savedSignature: string): boolean {
-	return contentSignature(snapshot) !== savedSignature;
+export function contentSignature(snapshot: WorkspaceSnapshot): string {
+	return JSON.stringify({
+		folders: snapshot.folders.map(({ id, name, parentId }) => ({ id, name, parentId })),
+		files: snapshot.files.map(({ id, name, folderId, content }) => ({
+			id,
+			name,
+			folderId,
+			content
+		}))
+	});
+}
+
+export function hasUnsavedChanges(
+	snapshot: WorkspaceSnapshot,
+	savedSignature: string,
+	savedContents?: Record<string, string>
+): boolean {
+	if (!savedContents) return contentSignature(snapshot) !== savedSignature;
+	if (structureSignature(snapshot) !== savedSignature) return true;
+	if (snapshot.files.length !== Object.keys(savedContents).length) return true;
+	return snapshot.files.some((file) => savedContents[file.id] !== file.content);
 }
 
 export function folderRows(folders: WorkspaceFolder[]): FolderRow[] {
@@ -384,7 +401,11 @@ function siblingFolderNames(
 		.map((folder) => folder.name);
 }
 
-function siblingFileNames(snapshot: WorkspaceSnapshot, folderId: string, exceptId?: string): string[] {
+function siblingFileNames(
+	snapshot: WorkspaceSnapshot,
+	folderId: string,
+	exceptId?: string
+): string[] {
 	return snapshot.files
 		.filter((file) => file.folderId === folderId && file.id !== exceptId)
 		.map((file) => file.name);
@@ -452,11 +473,15 @@ export function closeFile(snapshot: WorkspaceSnapshot, fileId: string): Workspac
 
 export function createFolder(
 	snapshot: WorkspaceSnapshot,
-	parentId: string,
+	parentId: string | null,
 	rawName: string
 ): WorkspaceSnapshot {
-	if (!snapshot.folders.some((folder) => folder.id === parentId)) return snapshot;
-	const name = uniqueName(siblingFolderNames(snapshot, parentId), normalizeName(rawName) || 'Ordner');
+	if (parentId !== null && !snapshot.folders.some((folder) => folder.id === parentId))
+		return snapshot;
+	const name = uniqueName(
+		siblingFolderNames(snapshot, parentId),
+		normalizeName(rawName) || 'Ordner'
+	);
 	const folder: WorkspaceFolder = { id: createId('folder'), name, parentId };
 	return { ...snapshot, folders: [...snapshot.folders, folder], selectedFolderId: folder.id };
 }
@@ -466,7 +491,8 @@ export function importFiles(
 	folderId: string,
 	incoming: { name: string; content: string }[]
 ): WorkspaceSnapshot {
-	if (!incoming.length || !snapshot.folders.some((folder) => folder.id === folderId)) return snapshot;
+	if (!incoming.length || !snapshot.folders.some((folder) => folder.id === folderId))
+		return snapshot;
 	let next = snapshot;
 	let lastId = '';
 	for (const item of incoming) {
@@ -503,7 +529,10 @@ export function createFile(
 		content,
 		updatedAt: Date.now()
 	};
-	return openFile({ ...snapshot, files: [...snapshot.files, file], selectedFolderId: folderId }, file.id);
+	return openFile(
+		{ ...snapshot, files: [...snapshot.files, file], selectedFolderId: folderId },
+		file.id
+	);
 }
 
 export function renameFolder(
@@ -544,7 +573,8 @@ export function renameFile(
 }
 
 export function deleteFile(snapshot: WorkspaceSnapshot, fileId: string): WorkspaceSnapshot {
-	if (snapshot.files.length <= 1 || !snapshot.files.some((file) => file.id === fileId)) return snapshot;
+	if (snapshot.files.length <= 1 || !snapshot.files.some((file) => file.id === fileId))
+		return snapshot;
 	const files = snapshot.files.filter((file) => file.id !== fileId);
 	let openFileIds = snapshot.openFileIds.filter((id) => id !== fileId);
 	let activeFileId = snapshot.activeFileId === fileId ? '' : snapshot.activeFileId;

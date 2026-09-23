@@ -9,12 +9,14 @@
 	import Files from '@lucide/svelte/icons/files';
 	import Flower2 from '@lucide/svelte/icons/flower-2';
 	import Info from '@lucide/svelte/icons/info';
+	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import Moon from '@lucide/svelte/icons/moon';
 	import Play from '@lucide/svelte/icons/play';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Redo2 from '@lucide/svelte/icons/redo-2';
 	import Save from '@lucide/svelte/icons/save';
 	import Book from '@lucide/svelte/icons/book';
+	import Settings from '@lucide/svelte/icons/settings';
 	import Share2 from '@lucide/svelte/icons/share-2';
 	import Square from '@lucide/svelte/icons/square';
 	import Sun from '@lucide/svelte/icons/sun';
@@ -25,23 +27,17 @@
 	import NewFileDialog from '$lib/components/new-file-dialog.svelte';
 	import WelcomeDialog from '$lib/components/welcome-dialog.svelte';
 	import CodeEditor from '$lib/components/code-editor.svelte';
-	import DocsBrowser from '$lib/docs/docs-browser.svelte';
 	import { takeDocsPopup } from '$lib/docs/popup';
+	import { languageForLessonId } from '$lib/docs/lookup';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import * as Popover from '$lib/components/ui/popover/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as ButtonGroup from '$lib/components/ui/button-group/index.js';
 	import * as Resizable from '$lib/components/ui/resizable/index.js';
-	import { Separator } from '$lib/components/ui/separator/index.js';
-	import type {
-		PythonWorkerMessage,
-		RuffDiagnostic,
-		RuffWorkerMessage,
-		RunnerStatus
-	} from '$lib/runner/protocol';
+	import type { RuffDiagnostic, RuffWorkerMessage, RunnerStatus } from '$lib/runner/protocol';
 	import { lineExcerpt } from '$lib/editor/explain';
-	import { renderDocumentPreview } from '$lib/editor/document-preview';
 	import {
 		editorLineForPreview,
 		previewDocument,
@@ -52,16 +48,16 @@
 		scriptDocument,
 		scriptLineOffset
 	} from '$lib/editor/preview';
-	import { lintWeb } from '$lib/editor/web-lint';
-	import { dependencyVersions } from 'virtual:dependency-versions';
 	import { resolveProjectPath } from '$lib/editor/links';
 	import { consoleSegments, matchProblem } from '$lib/runner/console-links';
+	import { clipBlocks, clipText } from '$lib/runner/limits';
+	import { disposePython, runPython, stopPython, watchPythonHost } from '$lib/runner/python-host';
 	import { canShareCode, createShareUrl, decodeCode, IMPORT_PARAM } from '$lib/runner/share';
 	import { WORKSPACE_ARCHIVE_NAME, workspaceExport } from '$lib/workspace/archive';
 	import { loadWorkspace, saveWorkspace, writeWorkspaceBackup } from '$lib/workspace/database';
 	import {
 		closeFile,
-		contentSignature,
+		structureSignature,
 		applyWelcomeChoice,
 		createFile,
 		createInitialWorkspace,
@@ -115,10 +111,12 @@
 
 	let consoleSeq = 1;
 	let consoleBlocks = $state<ConsoleBlock[]>([]);
-	let runnerStatus = $state<RunnerStatus>('loading');
+	let runnerStatus = $state<RunnerStatus>('ready');
 	let pythonVersion = $state<string>();
 	let versionsOpen = $state(false);
+	let settingsOpen = $state(false);
 	let docsOpen = $state(false);
+	let docsFocusId = $state('');
 	let diagnostics = $state<RuffDiagnostic[]>([]);
 	let lintError = $state<string>();
 	let notice = $state('');
@@ -154,29 +152,17 @@
 		showDiagnostic: (row: number, column: number, endRow: number, endColumn: number) => void;
 	} | null>(null);
 
-	let pythonWorker: Worker | undefined;
 	let ruffWorker: Worker | undefined;
 	let runId = 0;
 	let lintId = 0;
 	let lintTimer: ReturnType<typeof setTimeout> | undefined;
-	let runTimer: ReturnType<typeof setTimeout> | undefined;
 	let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 	let saveTicket = 0;
 	let saveQueue: Promise<unknown> = Promise.resolve();
 	let saveErrorAnnounced = false;
-	let pendingRun:
-		| {
-				id: number;
-				code: string;
-				filename: string;
-				fileId: string;
-				files: { path: string; content: string }[];
-		  }
-		| undefined;
 	let runFileId = '';
 	let lintedFileId = '';
-	let previewFileId = $state('');
 	let createOpen = $state(false);
 
 	const activeFile = $derived(
@@ -190,6 +176,9 @@
 	const isMarkdown = $derived(codeLanguage(editorName) === 'markdown');
 	const isJavaScript = $derived(codeLanguage(editorName) === 'javascript');
 	const isPython = $derived(isPythonFile(editorName));
+	const docsLanguage = $derived(
+		(docsFocusId ? languageForLessonId(docsFocusId) : null) ?? codeLanguage(editorName)
+	);
 	const showsPreview = $derived(isHtml || isMarkdown);
 	const showsOutput = $derived(isPython || isJavaScript);
 	const showsPane = $derived(showsPreview || showsOutput);
@@ -206,8 +195,9 @@
 	const consoleFileId = $derived(previewTarget?.id ?? editorFileId);
 	const fileConsole = $derived(consoleBlocks.filter((block) => block.fileId === consoleFileId));
 	const isRunning = $derived(runnerStatus === 'running');
+	const pythonLoading = $derived(isPython && runnerStatus === 'loading');
 	const stopping = $derived((isJavaScript && scriptRunning) || (!showsPreview && isRunning));
-	const dirty = $derived(hydrated && hasUnsavedChanges(workspace, savedSignature));
+	const dirty = $derived(hydrated && hasUnsavedChanges(workspace, savedSignature, savedContents));
 	const dirtyFileIds = $derived(
 		new Set(
 			workspace.files
@@ -220,8 +210,10 @@
 		if (runnerStatus === 'error') return 'nicht verfügbar';
 		return pythonVersion ?? 'bereit';
 	});
-	const runtimePackages = dependencyVersions.filter((item) => !item.dev);
-	const toolPackages = dependencyVersions.filter((item) => item.dev);
+
+	function commitConsole(blocks: ConsoleBlock[]) {
+		consoleBlocks = clipBlocks(blocks);
+	}
 
 	function announce(message: string) {
 		notice = message;
@@ -232,7 +224,7 @@
 	function pushNote(block: string, failed = false, fileId = runFileId || editorFileId) {
 		const text = block.replace(/\s+$/u, '');
 		if (!text || !fileId) return;
-		consoleBlocks = [
+		commitConsole([
 			...consoleBlocks,
 			{
 				id: ++consoleSeq,
@@ -249,12 +241,12 @@
 				line: null,
 				column: null
 			}
-		];
+		]);
 		scrollConsoleToEnd();
 	}
 
 	function beginRun(id: number, filename: string, fileId: string) {
-		consoleBlocks = [
+		commitConsole([
 			...consoleBlocks,
 			{
 				id: ++consoleSeq,
@@ -271,7 +263,7 @@
 				line: null,
 				column: null
 			}
-		];
+		]);
 		scrollConsoleToEnd();
 	}
 
@@ -281,11 +273,19 @@
 	) {
 		let updated = false;
 		const finishedAt = clockTime();
-		consoleBlocks = consoleBlocks.map((block) => {
-			if (block.runId !== id || block.status) return block;
-			updated = true;
-			return { ...block, ...patch, finishedAt };
-		});
+		commitConsole(
+			consoleBlocks.map((block) => {
+				if (block.runId !== id || block.status) return block;
+				updated = true;
+				return {
+					...block,
+					...patch,
+					stdout: clipText(patch.stdout),
+					stderr: clipText(patch.stderr),
+					finishedAt
+				};
+			})
+		);
 		if (updated) scrollConsoleToEnd();
 		return updated;
 	}
@@ -306,15 +306,15 @@
 
 	function clearConsole() {
 		const fileId = consoleFileId;
-		consoleBlocks = consoleBlocks.filter((block) => block.fileId !== fileId);
+		commitConsole(consoleBlocks.filter((block) => block.fileId !== fileId));
 	}
 
 	function dismissConsole(id: number) {
-		consoleBlocks = consoleBlocks.filter((block) => block.id !== id);
+		commitConsole(consoleBlocks.filter((block) => block.id !== id));
 	}
 
 	function markSaved(snapshot: WorkspaceSnapshot) {
-		savedSignature = contentSignature(snapshot);
+		savedSignature = structureSignature(snapshot);
 		savedContents = Object.fromEntries(snapshot.files.map((file) => [file.id, file.content]));
 	}
 
@@ -422,8 +422,19 @@
 		}
 		const filename = projectFilePath(workspace, activeFile);
 		const files = linkedProjectFiles();
-		if (!files.some((file) => file.path === filename)) files.push({ path: filename, content: editorCode });
+		if (!files.some((file) => file.path === filename))
+			files.push({ path: filename, content: editorCode });
 		return { filename, files };
+	}
+
+	function openDocs(lessonId = '') {
+		docsFocusId = lessonId;
+		docsOpen = true;
+	}
+
+	function openVersions() {
+		settingsOpen = false;
+		versionsOpen = true;
 	}
 
 	function toggleProblems() {
@@ -466,19 +477,19 @@
 		if (!block.stderr || !block.filename || block.filename !== editorName) return null;
 		const matches = consoleSegments(block.stderr, block.filename).flatMap((segment) => {
 			if (segment.line === null) return [];
-			const diagnostic = matchProblem(
-				diagnostics,
-				segment.line,
-				segment.column,
-				segment.endColumn
-			);
+			const diagnostic = matchProblem(diagnostics, segment.line, segment.column, segment.endColumn);
 			return diagnostic ? [diagnostic] : [];
 		});
 		if (matches.length > 0) return matches.at(-1) ?? null;
 		if (block.line == null) return null;
 		const column = block.column ?? 1;
 		return (
-			matchProblem(diagnostics, block.line, block.column, block.column == null ? null : column + 1) ?? {
+			matchProblem(
+				diagnostics,
+				block.line,
+				block.column,
+				block.column == null ? null : column + 1
+			) ?? {
 				code: null,
 				message: block.stderr,
 				start_location: { row: block.line, column },
@@ -540,78 +551,8 @@
 		codeEditor?.redoEdit();
 	}
 
-	function startPythonWorker() {
-		pythonWorker?.terminate();
-		runnerStatus = 'loading';
-		const worker = new Worker(new URL('$lib/runner/python.worker.ts', import.meta.url), {
-			type: 'module'
-		});
-		pythonWorker = worker;
-		worker.onmessage = (event: MessageEvent<PythonWorkerMessage>) => {
-			if (pythonWorker !== worker) return;
-			const message = event.data;
-			if (message.type === 'status') {
-				runnerStatus = message.status;
-				if (message.version) pythonVersion = message.version;
-				if (message.status === 'ready' && pendingRun) {
-					const nextRun = pendingRun;
-					pendingRun = undefined;
-					dispatchRun(
-						worker,
-						nextRun.id,
-						nextRun.code,
-						nextRun.filename,
-						nextRun.fileId,
-						nextRun.files
-					);
-				}
-				return;
-			}
-			if (message.type === 'fatal') {
-				const fileId = pendingRun?.fileId || runFileId || editorFileId;
-				pendingRun = undefined;
-				worker.terminate();
-				pythonWorker = undefined;
-				runnerStatus = 'error';
-				pushNote(`Python konnte nicht geladen werden.\n${message.error}`, true, fileId);
-				return;
-			}
-			if (message.id !== runId) return;
-			if (runTimer) clearTimeout(runTimer);
-			if (message.type === 'result') {
-				finishRun(message.id, {
-					stdout: message.stdout || (message.stderr ? '' : '(ohne Ausgabe beendet)'),
-					stderr: message.stderr,
-					status: `Beendet in ${Math.round(message.durationMs)} ms`,
-					failed: false
-				});
-			} else {
-				finishRun(message.id, {
-					stdout: '',
-					stderr: message.error,
-					status: `Nach ${Math.round(message.durationMs)} ms beendet`,
-					failed: true
-				});
-			}
-		};
-		worker.onerror = (event) => {
-			event.preventDefault();
-			if (pythonWorker !== worker) return;
-			const fileId = pendingRun?.fileId || runFileId || editorFileId;
-			pendingRun = undefined;
-			worker.terminate();
-			pythonWorker = undefined;
-			runnerStatus = 'error';
-			pushNote(
-				'Der Python-Prozess wurde unerwartet beendet. Er kann erneut gestartet werden.',
-				true,
-				fileId
-			);
-		};
-	}
-
 	function startRuffWorker() {
-		ruffWorker?.terminate();
+		if (ruffWorker) return;
 		const worker = new Worker(new URL('$lib/runner/ruff.worker.ts', import.meta.url), {
 			type: 'module'
 		});
@@ -642,11 +583,22 @@
 
 	function scheduleLint(source = editorCode) {
 		if (!isPython) return;
+		startRuffWorker();
 		if (lintTimer) clearTimeout(lintTimer);
 		lintTimer = setTimeout(() => {
 			lintId += 1;
 			ruffWorker?.postMessage({ type: 'lint', id: lintId, code: source });
 		}, 180);
+	}
+
+	function appendRunOutput(id: number, stream: 'stdout' | 'stderr', text: string) {
+		commitConsole(
+			consoleBlocks.map((block) => {
+				if (block.runId !== id || block.status) return block;
+				if (stream === 'stdout') return { ...block, stdout: clipText(block.stdout + text) };
+				return { ...block, stderr: clipText(block.stderr + text) };
+			})
+		);
 	}
 
 	function stopScript(message: string) {
@@ -711,41 +663,40 @@
 		runId += 1;
 		const payload = runPayload();
 		const fileId = editorFileId;
+		const thisId = runId;
 		runFileId = fileId;
-		if (!pythonWorker || runnerStatus === 'error') {
-			pendingRun = { id: runId, code: editorCode, fileId, ...payload };
-			startPythonWorker();
-			return;
-		}
-		dispatchRun(pythonWorker, runId, editorCode, payload.filename, fileId, payload.files);
-	}
-
-	function dispatchRun(
-		worker: Worker,
-		id: number,
-		source: string,
-		filename: string,
-		fileId: string,
-		files: { path: string; content: string }[]
-	) {
-		runnerStatus = 'running';
-		runFileId = fileId;
-		beginRun(id, filename, fileId);
-		worker.postMessage({ type: 'run', id, code: source, filename, files });
-		runTimer = setTimeout(
-			() => stopRun(`Ausführung nach ${RUN_TIMEOUT_MS / 1_000} Sekunden gestoppt.`),
-			RUN_TIMEOUT_MS
-		);
+		beginRun(thisId, payload.filename, fileId);
+		void runPython({
+			code: editorCode,
+			filename: payload.filename,
+			files: payload.files,
+			onOutput: (stream, text) => appendRunOutput(thisId, stream, text)
+		}).then((result) => {
+			if (result.failed) {
+				const note = result.error || result.stderr;
+				if (
+					!finishRun(thisId, {
+						stdout: result.stdout,
+						stderr: result.stopped ? result.stderr : note,
+						status: result.stopped ? note : `Nach ${Math.round(result.durationMs)} ms beendet`,
+						failed: true
+					})
+				) {
+					pushNote(note, true, fileId);
+				}
+				return;
+			}
+			finishRun(thisId, {
+				stdout: result.stdout || (result.stderr ? '' : '(ohne Ausgabe beendet)'),
+				stderr: result.stderr,
+				status: `Beendet in ${Math.round(result.durationMs)} ms`,
+				failed: false
+			});
+		});
 	}
 
 	function stopRun(message: string) {
-		if (runTimer) clearTimeout(runTimer);
-		pendingRun = undefined;
-		pythonWorker?.terminate();
-		pythonWorker = undefined;
-		if (!finishRun(runId, { stdout: '', stderr: '', status: message, failed: true }))
-			pushNote(message, true);
-		startPythonWorker();
+		stopPython(message);
 	}
 
 	function clearCode() {
@@ -864,13 +815,16 @@
 		const name = editorName;
 		lintTimer = setTimeout(() => {
 			if (ticket !== lintId) return;
-			try {
-				diagnostics = lintWeb(name, source);
-				lintError = undefined;
-			} catch (error) {
-				diagnostics = [];
-				lintError = error instanceof Error ? error.message : String(error);
-			}
+			void import('$lib/editor/web-lint').then(({ lintWeb }) => {
+				if (ticket !== lintId) return;
+				try {
+					diagnostics = lintWeb(name, source);
+					lintError = undefined;
+				} catch (error) {
+					diagnostics = [];
+					lintError = error instanceof Error ? error.message : String(error);
+				}
+			});
 		}, 180);
 		return () => {
 			if (lintTimer) clearTimeout(lintTimer);
@@ -879,10 +833,19 @@
 
 	$effect(() => {
 		if (!hydrated) return;
-		const snapshot = $state.snapshot(workspace) as WorkspaceSnapshot;
+		void workspace.files.map((file) => file.content + file.name + file.folderId);
+		void workspace.folders.map((folder) => folder.name + (folder.parentId ?? ''));
+		void workspace.openFileIds;
+		void workspace.activeFileId;
+		void workspace.selectedFolderId;
+		void workspace.welcomed;
+		void workspace.layout;
 		const ticket = ++saveTicket;
-		const savedAt = writeWorkspaceBackup(snapshot);
-		saveTimer = setTimeout(() => void enqueueSave(snapshot, ticket, savedAt), SAVE_DELAY_MS);
+		saveTimer = setTimeout(() => {
+			const snapshot = $state.snapshot(workspace) as WorkspaceSnapshot;
+			const savedAt = writeWorkspaceBackup(snapshot);
+			void enqueueSave(snapshot, ticket, savedAt);
+		}, SAVE_DELAY_MS);
 		return () => {
 			if (saveTimer) clearTimeout(saveTimer);
 		};
@@ -892,7 +855,6 @@
 
 	$effect(() => {
 		if (!hydrated) return;
-		if (isHtml) previewFileId = editorFileId;
 		if (!isJavaScript && scriptDoc) {
 			if (scriptTimer) clearTimeout(scriptTimer);
 			scriptDoc = '';
@@ -929,12 +891,25 @@
 		if (!rendered) return;
 		const timer = setTimeout(() => {
 			previewToken += 1;
-			consoleBlocks = consoleBlocks.filter(
-				(block) => block.fileId !== rendered.ownerId || block.kind !== 'preview'
+			const token = previewToken;
+			commitConsole(
+				consoleBlocks.filter(
+					(block) => block.fileId !== rendered.ownerId || block.kind !== 'preview'
+				)
 			);
-			previewDoc = previewDocument(renderDocumentPreview(rendered.name, rendered.source, dark), previewToken, {
-				baseDir: rendered.baseDir,
-				files: rendered.files
+			const publish = (html: string) => {
+				previewDoc = previewDocument(html, token, {
+					baseDir: rendered.baseDir,
+					files: rendered.files
+				});
+			};
+			if (isHtmlFile(rendered.name)) {
+				publish(rendered.source);
+				return;
+			}
+			void import('$lib/editor/document-preview').then(({ renderDocumentPreview }) => {
+				if (token !== previewToken) return;
+				publish(renderDocumentPreview(rendered.name, rendered.source, dark));
 			});
 			void nonce;
 		}, 160);
@@ -1006,8 +981,10 @@
 		if (scriptMessage) {
 			scriptLogged = true;
 			const failed = scriptMessage.level === 'error' || scriptMessage.level === 'warn';
-			const line = scriptMessage.line ? Math.max(1, scriptMessage.line - scriptLineOffsetLines) : null;
-			consoleBlocks = [
+			const line = scriptMessage.line
+				? Math.max(1, scriptMessage.line - scriptLineOffsetLines)
+				: null;
+			commitConsole([
 				...consoleBlocks,
 				{
 					id: ++consoleSeq,
@@ -1024,7 +1001,7 @@
 					line,
 					column: scriptMessage.column ?? null
 				}
-			];
+			]);
 			scrollConsoleToEnd();
 			return;
 		}
@@ -1032,7 +1009,8 @@
 		if (!message) return;
 		const failed = message.level === 'error' || message.level === 'warn';
 		const target = previewTarget;
-		const source = target && editorFileId === target.id ? editorCode : (target?.content ?? editorCode);
+		const source =
+			target && editorFileId === target.id ? editorCode : (target?.content ?? editorCode);
 		const linkedFile = previewFileFromUrl(message.url ?? '');
 		const line = linkedFile
 			? (message.line ?? null)
@@ -1044,7 +1022,7 @@
 				: null;
 		const origin = linkedFile || target?.name || editorName;
 		const ownerId = target?.id ?? editorFileId;
-		consoleBlocks = [
+		commitConsole([
 			...consoleBlocks,
 			{
 				id: ++consoleSeq,
@@ -1061,7 +1039,7 @@
 				line,
 				column: message.column ?? null
 			}
-		];
+		]);
 		if (previewConsoleOpen) scrollConsoleToEnd();
 	}
 
@@ -1075,17 +1053,21 @@
 		syncNarrow();
 		narrowQuery.addEventListener('change', syncNarrow);
 		window.addEventListener('message', onPreviewMessage);
+		const stopWatch = watchPythonHost((state) => {
+			runnerStatus = state.status === 'idle' ? 'ready' : state.status;
+			if (state.version) pythonVersion = state.version;
+		});
 		let cancelled = false;
 		void boot();
 		return () => {
 			cancelled = true;
+			stopWatch();
 			narrowQuery.removeEventListener('change', syncNarrow);
 			window.removeEventListener('message', onPreviewMessage);
 			flushWorkspace();
-			pythonWorker?.terminate();
+			disposePython();
 			ruffWorker?.terminate();
 			if (lintTimer) clearTimeout(lintTimer);
-			if (runTimer) clearTimeout(runTimer);
 			if (noticeTimer) clearTimeout(noticeTimer);
 		};
 
@@ -1113,15 +1095,16 @@
 			markSaved(loaded.snapshot);
 			workspace = loaded.snapshot;
 			hydrated = true;
-			startPythonWorker();
-			startRuffWorker();
 		}
 	});
 </script>
 
 <svelte:head>
 	<title>K+ Coder</title>
-	<meta name="description" content="Python, HTML, CSS und JavaScript direkt und vollständig lokal im Browser." />
+	<meta
+		name="description"
+		content="Python, HTML, CSS und JavaScript direkt und vollständig lokal im Browser."
+	/>
 </svelte:head>
 
 <svelte:window
@@ -1132,7 +1115,7 @@
 />
 
 {#if !hydrated}
-	<div class="boot">Workspace wird geladen …</div>
+	<div class="boot">Wird geladen …</div>
 {:else}
 	<div class="app-shell">
 		<header class="topbar">
@@ -1141,40 +1124,40 @@
 				size={narrow ? 'icon-sm' : 'sm'}
 				class="files-button"
 				onclick={openExplorer}
-				aria-label="Files"
-				title={dirty ? 'Ungespeicherte Änderungen' : 'Files'}
+				aria-label="Dateien"
+				title={dirty ? 'Ungespeicherte Änderungen' : 'Dateien'}
 			>
 				<Files />
-				<span class="action-label">Files</span>
+				<span class="action-label">Dateien</span>
 				{#if dirty}<i class="dirty-mark" aria-hidden="true"></i>{/if}
 			</Button>
 			<div class="toolbar">
-				<Button
-					variant="outline"
-					size="icon-sm"
-					onclick={() => (versionsOpen = true)}
-					aria-label="Versionen"
-					title="Versionen"
-				>
-					<Info />
-				</Button>
 				<ButtonGroup.Root aria-label="Ausführen und Datei">
 					<Button
 						variant="outline"
 						size={narrow ? 'icon-sm' : 'sm'}
+						class={pythonLoading ? 'run-busy' : undefined}
 						onclick={runCode}
-						disabled={!showsPreview && !isJavaScript && (!isPython || runnerStatus === 'loading')}
-						aria-label={showsPreview ? 'Vorschau neu laden' : stopping ? 'Stopp' : 'Ausführen'}
+						disabled={!showsPreview && !isJavaScript && (!isPython || pythonLoading)}
+						aria-busy={pythonLoading}
+						aria-label={showsPreview
+							? 'Vorschau neu laden'
+							: pythonLoading
+								? 'Python wird geladen'
+								: stopping
+									? 'Stopp'
+									: 'Ausführen'}
 						title={showsPreview
 							? 'Vorschau neu laden'
 							: !isJavaScript && !isPython
 								? 'Diese Datei wird nicht ausgeführt'
-								: isPython && runnerStatus === 'loading'
+								: pythonLoading
 									? 'Python wird geladen'
 									: stopping
 										? 'Stopp'
 										: 'Ausführen'}
-						>{#if stopping}<Square />{:else}<Play />{/if}<span class="action-label"
+						>{#if pythonLoading}<LoaderCircle class="animate-spin" />{:else if stopping}<Square
+							/>{:else}<Play />{/if}<span class="action-label"
 							>{showsPreview ? 'Aktualisieren' : stopping ? 'Stopp' : 'Ausführen'}</span
 						></Button
 					>
@@ -1188,7 +1171,7 @@
 					<Button
 						variant="outline"
 						size={narrow ? 'icon-sm' : 'sm'}
-						onclick={() => (docsOpen = true)}
+						onclick={() => openDocs()}
 						aria-label="Doku"
 						title="Doku"><Book /><span class="action-label">Doku</span></Button
 					>
@@ -1197,8 +1180,9 @@
 							variant="outline"
 							size={narrow ? 'icon-sm' : 'sm'}
 							onclick={openSaveShare}
-							aria-label="Save to files"
-							title="Save to files"><Save /><span class="action-label">Save to files</span></Button
+							aria-label="In Dateien speichern"
+							title="In Dateien speichern"
+							><Save /><span class="action-label">Speichern</span></Button
 						>
 					{/if}
 					<Button
@@ -1209,39 +1193,66 @@
 						title="Herunterladen (Cmd/Strg+S)"><Download /></Button
 					>
 				</ButtonGroup.Root>
-				<Separator orientation="vertical" class="mx-1 h-5" />
-				<ButtonGroup.Root aria-label="Darstellung">
-					<Button
-						variant={theme === 'light' ? 'secondary' : 'ghost'}
-						size="icon-sm"
-						onclick={() => applyTheme('light')}
-						aria-label="Helles Design"
-						aria-pressed={theme === 'light'}><Sun /></Button
-					>
-					<Button
-						variant={theme === 'dark' ? 'secondary' : 'ghost'}
-						size="icon-sm"
-						onclick={() => applyTheme('dark')}
-						aria-label="Dunkles Design"
-						aria-pressed={theme === 'dark'}><Moon /></Button
-					>
-					<Button
-						variant={theme === 'coffee' ? 'secondary' : 'ghost'}
-						size="icon-sm"
-						onclick={() => applyTheme('coffee')}
-						aria-label="Kaffee"
-						title="Kaffee"
-						aria-pressed={theme === 'coffee'}><Coffee /></Button
-					>
-					<Button
-						variant={theme === 'pink' ? 'secondary' : 'ghost'}
-						size="icon-sm"
-						onclick={() => applyTheme('pink')}
-						aria-label="Rosa"
-						title="Rosa"
-						aria-pressed={theme === 'pink'}><Flower2 /></Button
-					>
-				</ButtonGroup.Root>
+				<Popover.Root bind:open={settingsOpen}>
+					<Popover.Trigger>
+						{#snippet child({ props })}
+							<Button
+								variant="outline"
+								size="icon-sm"
+								aria-label="Einstellungen"
+								title="Einstellungen"
+								{...props}><Settings /></Button
+							>
+						{/snippet}
+					</Popover.Trigger>
+					<Popover.Content>
+						<div class="settings">
+							<Button
+								variant="outline"
+								size="sm"
+								class="w-full justify-start"
+								onclick={openVersions}
+								aria-label="Versionen"
+							>
+								<Info />
+								<span>Versionen</span>
+							</Button>
+							<p class="settings-label">Design</p>
+							<ButtonGroup.Root aria-label="Darstellung">
+								<Button
+									variant={theme === 'light' ? 'secondary' : 'ghost'}
+									size="icon-sm"
+									onclick={() => applyTheme('light')}
+									aria-label="Helles Design"
+									aria-pressed={theme === 'light'}><Sun /></Button
+								>
+								<Button
+									variant={theme === 'dark' ? 'secondary' : 'ghost'}
+									size="icon-sm"
+									onclick={() => applyTheme('dark')}
+									aria-label="Dunkles Design"
+									aria-pressed={theme === 'dark'}><Moon /></Button
+								>
+								<Button
+									variant={theme === 'coffee' ? 'secondary' : 'ghost'}
+									size="icon-sm"
+									onclick={() => applyTheme('coffee')}
+									aria-label="Kaffee"
+									title="Kaffee"
+									aria-pressed={theme === 'coffee'}><Coffee /></Button
+								>
+								<Button
+									variant={theme === 'pink' ? 'secondary' : 'ghost'}
+									size="icon-sm"
+									onclick={() => applyTheme('pink')}
+									aria-label="Rosa"
+									title="Rosa"
+									aria-pressed={theme === 'pink'}><Flower2 /></Button
+								>
+							</ButtonGroup.Root>
+						</div>
+					</Popover.Content>
+				</Popover.Root>
 			</div>
 		</header>
 
@@ -1258,17 +1269,17 @@
 			{#if !showsPane || terminalCollapsed}
 				<section class="editor-pane">{@render editor()}</section>
 				{#if showsPane}
-				<aside class="terminal-rail">
-					<button
-						type="button"
-						class="rail-toggle"
-						onclick={() => (terminalCollapsed = false)}
-						aria-label={previewing ? 'Vorschau einblenden' : 'Ausgabe einblenden'}
-						title={previewing ? 'Vorschau einblenden' : 'Ausgabe einblenden'}
-					>
-						<ChevronLeft /><span class="rail-label">{previewing ? 'Vorschau' : 'Ausgabe'}</span>
-					</button>
-				</aside>
+					<aside class="terminal-rail">
+						<button
+							type="button"
+							class="rail-toggle"
+							onclick={() => (terminalCollapsed = false)}
+							aria-label={previewing ? 'Vorschau einblenden' : 'Ausgabe einblenden'}
+							title={previewing ? 'Vorschau einblenden' : 'Ausgabe einblenden'}
+						>
+							<ChevronLeft /><span class="rail-label">{previewing ? 'Vorschau' : 'Ausgabe'}</span>
+						</button>
+					</aside>
 				{/if}
 			{:else}
 				<Resizable.PaneGroup
@@ -1315,46 +1326,37 @@
 		ontheme={applyTheme}
 		onstart={finishWelcome}
 	/>
-	<Dialog.Root bind:open={docsOpen}>
-		<Dialog.Content class="docs-popup">
+	<Dialog.Root
+		bind:open={docsOpen}
+		onOpenChange={(open) => {
+			if (!open) docsFocusId = '';
+		}}
+	>
+		<Dialog.Content
+			class="docs-popup top-[max(1rem,8vh)] right-[max(1rem,8vw)] bottom-[max(1rem,8vh)] left-[max(1rem,8vw)] h-auto max-h-none w-auto max-w-none translate-x-0 translate-y-0"
+		>
 			<Dialog.Title class="sr-only">Doku</Dialog.Title>
 			<Dialog.Description class="sr-only">Erklärungen zu den Dateitypen.</Dialog.Description>
-			<DocsBrowser fill language={codeLanguage(editorName)} />
+			{#if docsOpen}
+				{#await import('$lib/docs/docs-browser.svelte') then { default: DocsBrowser }}
+					<DocsBrowser fill language={docsLanguage} focusId={docsFocusId} />
+				{/await}
+			{/if}
 		</Dialog.Content>
 	</Dialog.Root>
 	<Dialog.Root bind:open={versionsOpen}>
-		<Dialog.Content class="flex max-h-[min(40rem,calc(100dvh-2rem))] flex-col overflow-hidden sm:max-w-md">
+		<Dialog.Content
+			class="flex max-h-[min(40rem,calc(100dvh-2rem))] flex-col overflow-hidden sm:max-w-md"
+		>
 			<Dialog.Header>
 				<Dialog.Title>Versionen</Dialog.Title>
-				<Dialog.Description>Python und die installierten Pakete.</Dialog.Description>
+				<Dialog.Description>Die Laufzeiten, die deinen Code ausführen.</Dialog.Description>
 			</Dialog.Header>
 			<div class="versions">
 				<p>
 					<span>Python</span>
 					<span>{pythonStatus}</span>
 				</p>
-				<section>
-					<h3>Abhängigkeiten</h3>
-					<ul>
-						{#each runtimePackages as item (item.name)}
-							<li>
-								<span title={item.name}>{item.name}</span>
-								<span>{item.version}</span>
-							</li>
-						{/each}
-					</ul>
-				</section>
-				<section>
-					<h3>Entwicklung</h3>
-					<ul>
-						{#each toolPackages as item (item.name)}
-							<li>
-								<span title={item.name}>{item.name}</span>
-								<span>{item.version}</span>
-							</li>
-						{/each}
-					</ul>
-				</section>
 			</div>
 		</Dialog.Content>
 	</Dialog.Root>
@@ -1458,6 +1460,7 @@
 				wrapLines={narrow}
 				visible={pane === 'code'}
 				onchange={editActiveFile}
+				onopendocs={openDocs}
 				onhistory={(state) => {
 					canUndo = state.canUndo;
 					canRedo = state.canRedo;
@@ -1488,7 +1491,6 @@
 									>
 										<span class="problem-meta">
 											Zeile {diagnostic.start_location.row}:{diagnostic.start_location.column}
-											<Badge variant="secondary">{diagnostic.code ?? 'Syntax'}</Badge>
 										</span>
 										<span class="problem-detail">{diagnostic.message}</span>
 										<pre class="problem-source"><code>{excerpt.line || ' '}</code
@@ -1722,6 +1724,22 @@
 		justify-content: flex-end;
 		gap: 0.4rem;
 	}
+	.settings {
+		display: grid;
+		gap: 0.7rem;
+	}
+	.settings-label {
+		margin: 0;
+		color: var(--muted-foreground);
+		font: 650 0.68rem/1.3 var(--font-sans);
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+	}
+	:global(.run-busy) {
+		background: color-mix(in oklch, var(--background) 72%, black) !important;
+		color: var(--muted-foreground) !important;
+		opacity: 1 !important;
+	}
 	.dirty-mark {
 		width: 0.42rem;
 		height: 0.42rem;
@@ -1908,7 +1926,9 @@
 		background: var(--background);
 		font: 400 0.76rem/1.45 var(--font-code);
 		font-variant-ligatures: contextual;
-		font-feature-settings: 'calt' 1, 'liga' 1;
+		font-feature-settings:
+			'calt' 1,
+			'liga' 1;
 	}
 	.problem-source code {
 		white-space: pre;
@@ -2120,7 +2140,9 @@
 		padding: 0.65rem 0.75rem 0.7rem;
 		font: 400 0.82rem/1.55rem var(--font-code);
 		font-variant-ligatures: contextual;
-		font-feature-settings: 'calt' 1, 'liga' 1;
+		font-feature-settings:
+			'calt' 1,
+			'liga' 1;
 		word-break: break-word;
 	}
 	.console-out {
@@ -2222,12 +2244,14 @@
 		font-size: 0.78rem;
 	}
 	:global(.docs-popup) {
-		top: 10dvh !important;
-		left: 10dvw !important;
+		top: max(1rem, 8vh, env(safe-area-inset-top, 0px) + 0.75rem) !important;
+		right: max(1rem, 8vw, env(safe-area-inset-right, 0px) + 0.75rem) !important;
+		bottom: max(1rem, 8vh, env(safe-area-inset-bottom, 0px) + 0.75rem) !important;
+		left: max(1rem, 8vw, env(safe-area-inset-left, 0px) + 0.75rem) !important;
 		display: flex !important;
 		flex-direction: column;
-		width: 80dvw !important;
-		height: 80dvh !important;
+		width: auto !important;
+		height: auto !important;
 		max-width: none !important;
 		max-height: none !important;
 		transform: none !important;
@@ -2235,6 +2259,7 @@
 		gap: 0;
 		padding: 0 !important;
 		overflow: hidden;
+		animation: none !important;
 	}
 	:global(.docs-popup .browser) {
 		flex: 1 1 auto;
@@ -2247,8 +2272,7 @@
 		overflow: auto;
 		padding-right: 0.15rem;
 	}
-	.versions p,
-	.versions li {
+	.versions p {
 		display: flex;
 		align-items: baseline;
 		justify-content: space-between;
@@ -2256,33 +2280,17 @@
 		margin: 0;
 		font: 500 0.75rem/1.45 var(--font-code);
 	}
-	.versions p span:first-child,
-	.versions li span:first-child {
+	.versions p span:first-child {
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.versions p span:last-child,
-	.versions li span:last-child {
+	.versions p span:last-child {
 		flex: 0 0 auto;
 		color: var(--muted-foreground);
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
-	}
-	.versions h3 {
-		margin: 0 0 0.3rem;
-		color: var(--muted-foreground);
-		font: 650 0.68rem/1.3 var(--font-sans);
-		letter-spacing: 0.03em;
-		text-transform: uppercase;
-	}
-	.versions ul {
-		display: grid;
-		gap: 0.15rem;
-		margin: 0;
-		padding: 0;
-		list-style: none;
 	}
 	@media (max-width: 899px) {
 		.topbar {

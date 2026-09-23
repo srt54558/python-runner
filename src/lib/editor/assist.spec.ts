@@ -2,7 +2,7 @@ import { CompletionContext } from '@codemirror/autocomplete';
 import { html } from '@codemirror/lang-html';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
-import { htmlTagSnippets } from './assist';
+import { htmlTagSnippets } from './assist-web';
 
 function complete(doc: string, pos = doc.length) {
 	const state = EditorState.create({ doc, extensions: [html()] });

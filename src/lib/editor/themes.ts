@@ -61,7 +61,11 @@ function highlight(palette: Palette) {
 	return HighlightStyle.define([
 		{ tag: [tags.keyword, tags.modifier, tags.self, tags.bool, tags.null], color: palette.keyword },
 		{ tag: [tags.string, tags.special(tags.string)], color: palette.string },
-		{ tag: [tags.comment, tags.lineComment, tags.blockComment], color: palette.comment, fontStyle: 'italic' },
+		{
+			tag: [tags.comment, tags.lineComment, tags.blockComment],
+			color: palette.comment,
+			fontStyle: 'italic'
+		},
 		{ tag: [tags.number, tags.integer, tags.float], color: palette.number },
 		{
 			tag: [tags.function(tags.variableName), tags.function(tags.definition(tags.variableName))],
@@ -167,6 +171,27 @@ export function themeExtensions(theme: AppTheme) {
 					fontSize: '0.75rem',
 					lineHeight: '1.4',
 					whiteSpace: 'pre-wrap'
+				},
+				'.cm-docs-link': {
+					display: 'inline-flex',
+					alignItems: 'center',
+					gap: '0.28rem',
+					marginTop: '0.4rem',
+					padding: 0,
+					border: 0,
+					background: 'transparent',
+					color: 'inherit',
+					fontFamily: 'var(--font-sans)',
+					fontSize: '0.75rem',
+					lineHeight: 1.2,
+					textDecoration: 'underline',
+					textUnderlineOffset: '0.16em',
+					cursor: 'pointer'
+				},
+				'.cm-docs-link svg': {
+					width: '0.75rem',
+					height: '0.75rem',
+					flex: '0 0 auto'
 				},
 				'.cm-diagnosticText': {
 					fontFamily: 'var(--font-sans)'

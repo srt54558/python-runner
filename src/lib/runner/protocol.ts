@@ -2,6 +2,7 @@ export type RunnerStatus = 'loading' | 'ready' | 'running' | 'error';
 
 export type PythonWorkerMessage =
 	| { type: 'status'; status: RunnerStatus; version?: string }
+	| { type: 'output'; id: number; stream: 'stdout' | 'stderr'; text: string }
 	| { type: 'result'; id: number; stdout: string; stderr: string; durationMs: number }
 	| { type: 'error'; id: number; error: string; durationMs: number }
 	| { type: 'fatal'; error: string };

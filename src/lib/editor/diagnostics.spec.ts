@@ -14,7 +14,13 @@ describe('editor diagnostics', () => {
 				end_location: { row: 1, column: 2 }
 			}
 		]);
-		expect(diagnostic).toMatchObject({ from: 0, to: 1, severity: 'warning' });
+		expect(diagnostic).toMatchObject({
+			from: 0,
+			to: 1,
+			severity: 'warning',
+			message: '`x` is assigned but never used'
+		});
+		expect(diagnostic.message).not.toMatch(/F841/u);
 	});
 
 	it('treats syntax failures as errors and keeps a visible range', () => {

@@ -6,7 +6,11 @@
 	import { WEB_LESSONS } from '$lib/docs/web-lessons';
 	import type { CodeLanguage } from '$lib/workspace/model';
 
-	let { fill = false, language }: { fill?: boolean; language: CodeLanguage } = $props();
+	let {
+		fill = false,
+		language,
+		focusId = ''
+	}: { fill?: boolean; language: CodeLanguage; focusId?: string } = $props();
 
 	const topics = {
 		html: { label: 'HTML', lead: 'Elemente, Text und das Gerüst einer Seite.' },
@@ -16,7 +20,10 @@
 		xml: { label: 'XML', lead: 'Strukturierte Daten mit Tags.' },
 		markdown: { label: 'Markdown', lead: 'Text mit einfacher Auszeichnung.' },
 		text: { label: 'Text', lead: 'Zeichen, sonst nichts.' },
-		python: { label: 'Python', lead: 'Kurz erklärt. Jedes Beispiel kannst du ändern und ausführen.' }
+		python: {
+			label: 'Python',
+			lead: 'Kurz erklärt. Ausführen zeigt die Ausgabe des Beispiels.'
+		}
 	} as const;
 
 	const topic = $derived(topics[language]);
@@ -27,7 +34,7 @@
 
 {#snippet example(lesson: Lesson)}
 	{#if language === 'python'}
-		<ExampleDemo code={lesson.code} />
+		<ExampleDemo code={lesson.code} output={lesson.output ?? ''} />
 	{:else}
 		<WebDemo code={lesson.code} filename={lesson.filename} />
 	{/if}
@@ -35,7 +42,7 @@
 
 <div class="browser" class:fill>
 	{#key language}
-		<Guide title={topic.label} lead={topic.lead} {lessons} {example} embedded={fill} />
+		<Guide title={topic.label} lead={topic.lead} {lessons} {example} embedded={fill} {focusId} />
 	{/key}
 </div>
 

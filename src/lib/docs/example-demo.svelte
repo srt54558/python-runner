@@ -1,45 +1,43 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { runDemo, watchDemoRunner, type DemoState } from './demo-runner';
 
-	let { code }: { code: string } = $props();
+	let { code, output }: { code: string; output: string } = $props();
 
 	let edited = $state<string | null>(null);
-	let python = $state<DemoState>('loading');
 	let running = $state(false);
 	let ran = $state(false);
-	let stdout = $state('');
-	let stderr = $state('');
-	let alive = true;
+	let shown = $state('');
+	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	const draft = $derived(edited ?? code);
 	const dirty = $derived(edited !== null && edited !== code);
-	const runLabel = $derived(
-		python === 'loading' ? 'Python wird geladen' : running ? 'Läuft' : 'Ausführen'
-	);
+	const runLabel = $derived(running ? 'Läuft' : 'Ausführen');
 
-	onMount(() => {
-		const stop = watchDemoRunner((state) => (python = state));
-		return () => {
-			alive = false;
-			stop();
-		};
-	});
-
-	async function execute() {
-		if (python !== 'ready' || running) return;
+	function execute() {
+		if (running) return;
 		running = true;
 		ran = true;
-		stdout = '';
-		stderr = '';
-		const result = await runDemo(draft);
-		if (!alive) return;
-		stdout = result.stdout;
-		stderr = result.stderr;
-		running = false;
+		shown = '';
+		if (timer) clearTimeout(timer);
+		timer = setTimeout(() => {
+			shown = output;
+			running = false;
+		}, 180);
 	}
+
+	function reset() {
+		if (timer) clearTimeout(timer);
+		edited = null;
+		running = false;
+		shown = '';
+		ran = false;
+	}
+
+	onDestroy(() => {
+		if (timer) clearTimeout(timer);
+	});
 </script>
 
 <div class="demo">
@@ -50,24 +48,17 @@
 		{@attach (node) => node.setAttribute('autocorrect', 'off')}
 		aria-label="Beispiel"
 		value={draft}
-		oninput={(event) => (edited = event.currentTarget.value)}
-	></textarea>
+		oninput={(event) => (edited = event.currentTarget.value)}></textarea>
 	<div class="demo-actions">
-		<Button
-			variant="outline"
-			size="sm"
-			onclick={execute}
-			disabled={python !== 'ready' || running}
-			title={runLabel}><Play />{runLabel}</Button
+		<Button variant="outline" size="sm" onclick={execute} disabled={running} title={runLabel}
+			><Play />{runLabel}</Button
 		>
 		{#if dirty}
-			<Button variant="ghost" size="sm" onclick={() => (edited = null)}>Zurücksetzen</Button>
+			<Button variant="ghost" size="sm" onclick={reset}>Zurücksetzen</Button>
 		{/if}
 	</div>
 	{#if ran}
-		{#if stdout}<pre class="demo-out">{stdout}</pre>{/if}
-		{#if stderr}<pre class="demo-err">{stderr}</pre>{/if}
-		{#if !stdout && !stderr}<pre class="demo-out">Keine Ausgabe</pre>{/if}
+		<pre class="demo-out">{running ? '' : shown || 'Keine Ausgabe'}</pre>
 	{/if}
 </div>
 
@@ -88,7 +79,9 @@
 		color: var(--foreground);
 		font: 400 0.82rem/1.55 var(--font-code);
 		font-variant-ligatures: contextual;
-		font-feature-settings: 'calt' 1, 'liga' 1;
+		font-feature-settings:
+			'calt' 1,
+			'liga' 1;
 		field-sizing: fixed;
 		max-width: 100%;
 		min-width: 0;
@@ -103,24 +96,20 @@
 		flex-wrap: wrap;
 		gap: 0.4rem;
 	}
-	.demo-out,
-	.demo-err {
+	.demo-out {
 		margin: 0;
 		padding: 0.65rem 0.75rem;
 		border: 1px solid var(--border);
 		border-radius: 0;
 		font: 400 0.8rem/1.5 var(--font-code);
 		font-variant-ligatures: contextual;
-		font-feature-settings: 'calt' 1, 'liga' 1;
+		font-feature-settings:
+			'calt' 1,
+			'liga' 1;
 		white-space: pre-wrap;
 		word-break: break-word;
-	}
-	.demo-out {
 		color: var(--foreground);
 		background: var(--background);
-	}
-	.demo-err {
-		color: var(--destructive);
-		background: color-mix(in oklch, var(--destructive) 8%, var(--background));
+		min-height: 2.4rem;
 	}
 </style>

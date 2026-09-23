@@ -11,7 +11,10 @@ const CACHE = `k-plus-coder-${version}`;
 // `_headers` is a Cloudflare config file, not an app asset. `_app` stays included.
 const PRECACHE = [...new Set([...build, ...files, ...prerendered])].filter((pathname) => {
 	const name = pathname.slice(pathname.lastIndexOf('/') + 1);
-	return name !== '_headers' && name !== '_redirects';
+	if (name === '_headers' || name === '_redirects') return false;
+	if (pathname.includes('/pyodide/')) return false;
+	if (pathname.endsWith('.wasm')) return false;
+	return true;
 });
 
 // A new worker waits until open editors close, so an update cannot drop hashed
@@ -51,12 +54,24 @@ sw.addEventListener('fetch', (event) => {
 		return;
 	}
 
+	if (url.pathname.includes('/pyodide/') || url.pathname.endsWith('.wasm')) {
+		event.respondWith(cacheFirstRequest(request));
+		return;
+	}
+
 	event.respondWith(networkFirst(request));
 });
 
 async function cacheFirst(pathname: string, request: Request) {
 	const cache = await caches.open(CACHE);
 	const cached = await cache.match(pathname);
+	if (cached) return cached;
+	return networkFirst(request);
+}
+
+async function cacheFirstRequest(request: Request) {
+	const cache = await caches.open(CACHE);
+	const cached = await cache.match(request);
 	if (cached) return cached;
 	return networkFirst(request);
 }

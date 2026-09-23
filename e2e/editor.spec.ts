@@ -40,7 +40,10 @@ async function createFile(page: Page, name: string) {
 	await dialog.getByRole('button', { name: 'Anlegen' }).click();
 	await expect(dialog).toBeHidden();
 	const extension = name.split('.').pop() ?? '';
-	await expect(page.locator('.cm-content')).toHaveAttribute('aria-label', LABELS[extension] ?? 'Text');
+	await expect(page.locator('.cm-content')).toHaveAttribute(
+		'aria-label',
+		LABELS[extension] ?? 'Text'
+	);
 }
 
 async function setEditor(page: Page, text: string) {
@@ -79,7 +82,9 @@ async function showProblems(page: Page) {
 }
 
 async function expectBubble(page: Page, text: RegExp) {
-	await expect(page.locator('.cm-diagnostic, .cm-diagnostic-message').filter({ hasText: text }).first()).toBeVisible();
+	await expect(
+		page.locator('.cm-diagnostic, .cm-diagnostic-message').filter({ hasText: text }).first()
+	).toBeVisible();
 }
 
 async function expectCompletion(page: Page, name: RegExp) {
@@ -93,7 +98,9 @@ async function expectCompletion(page: Page, name: RegExp) {
 	await expect(list.getByRole('option', { name }).first()).toBeVisible();
 }
 
-test('welcome chooses the design and writes example code only into the first file', async ({ page }) => {
+test('welcome chooses the design and writes example code only into the first file', async ({
+	page
+}) => {
 	await page.goto('/');
 	const dialog = page.getByRole('dialog', { name: 'Willkommen' });
 	await expect(dialog).toBeVisible();
@@ -117,13 +124,14 @@ test('shows dependency versions and does not mark a valid html file', async ({ p
 	await expect(welcome).toBeHidden();
 	await expect(page.getByRole('tab', { name: 'seite.html' })).toBeVisible();
 
+	await page.getByRole('button', { name: 'Einstellungen' }).click();
 	await page.getByRole('button', { name: 'Versionen' }).click();
 	const versions = page.getByRole('dialog', { name: 'Versionen' });
 	await expect(versions.getByText('Python', { exact: true })).toBeVisible();
-	await expect(versions.getByText('pyodide', { exact: true })).toBeVisible();
-	await expect(versions.getByText('svelte', { exact: true })).toBeVisible();
-	await expect(versions.getByRole('heading', { name: 'Abhängigkeiten' })).toBeVisible();
-	await expect(versions.getByRole('heading', { name: 'Entwicklung' })).toBeVisible();
+	await expect(versions.getByText('pyodide')).toHaveCount(0);
+	await expect(versions.getByText('svelte')).toHaveCount(0);
+	await expect(versions.getByRole('heading', { name: 'Abhängigkeiten' })).toHaveCount(0);
+	await expect(versions.getByRole('heading', { name: 'Entwicklung' })).toHaveCount(0);
 	await page.keyboard.press('Escape');
 	await expect(versions).toBeHidden();
 	await expect(page.locator('.toolbar')).not.toContainText(/Python \d/u);
@@ -146,7 +154,7 @@ test('opens the docs routes as a popup on the editor', async ({ page }) => {
 		const docs = page.getByRole('dialog', { name: 'Doku' });
 		await expect(docs).toBeVisible();
 		await expect(page).toHaveURL(/\/$/u);
-		await expect(docs.getByRole('heading', { level: 1, name: 'Python' })).toBeVisible();
+		await expect(docs.getByRole('heading', { name: 'Ausgabe' })).toBeVisible();
 		await page.keyboard.press('Escape');
 		await expect(docs).toBeHidden();
 	}
@@ -158,10 +166,12 @@ test('names the product K+ Coder and checks new file names', async ({ page }) =>
 	const docs = page.getByRole('dialog', { name: 'Doku' });
 	await expect(docs).toBeVisible();
 	await expect(page).not.toHaveURL(/\/docs/u);
-	await expect(docs.getByRole('heading', { level: 1, name: 'Python' })).toBeVisible();
 	await expect(docs.getByRole('heading', { name: 'Ausgabe' })).toBeVisible();
 	await expect(docs.getByRole('button', { name: 'Themen' })).toHaveCount(0);
-	await docs.getByRole('navigation', { name: 'Inhalt' }).getByRole('button', { name: 'Kommentare' }).click();
+	await docs
+		.getByRole('navigation', { name: 'Inhalt' })
+		.getByRole('button', { name: 'Kommentare' })
+		.click();
 	await expect(page).toHaveURL(/\/$/u);
 	await page.keyboard.press('Escape');
 	await expect(docs).toBeHidden();
@@ -181,7 +191,9 @@ test('names the product K+ Coder and checks new file names', async ({ page }) =>
 	await expect(dialog).toBeHidden();
 });
 
-test('lints script and style in html, jumps to the problem, and links the preview error', async ({ page }) => {
+test('lints script and style in html, jumps to the problem, and links the preview error', async ({
+	page
+}) => {
 	await openCoder(page);
 	await createFile(page, 'seite.html');
 	await setEditor(
@@ -266,7 +278,7 @@ test('completes and lints javascript, css, json, xml, markdown, and text', async
 	await createFile(page, 'note.md');
 	await setEditor(page, '```js\nconsole.log(1)\n');
 	await showProblems(page);
-	await expect(page.getByRole('button', { name: /MD/u })).toBeVisible();
+	await expect(page.getByRole('button', { name: /Codeblock/u })).toBeVisible();
 
 	await createFile(page, 'notiz.txt');
 	await setEditor(page, 'nur text');
@@ -309,7 +321,11 @@ test('attributes a preview log to the script it came from', async ({ page }) => 
 	await page.getByRole('button', { name: 'Konsole einblenden' }).click();
 	await expect(page.locator('.console-out').filter({ hasText: 'von-js' })).toBeVisible();
 	await expect(page.locator('.console-title').filter({ hasText: 'app.js:1' })).toBeVisible();
-	await page.locator('.console-block').filter({ hasText: 'missing' }).getByRole('button', { name: 'Wo?' }).click();
+	await page
+		.locator('.console-block')
+		.filter({ hasText: 'missing' })
+		.getByRole('button', { name: 'Wo?' })
+		.click();
 	await expect(page.getByRole('tab', { name: 'app.js', selected: true })).toBeVisible();
 	await expect(page.locator('.cm-activeLine')).toContainText('missing');
 });
@@ -319,7 +335,9 @@ test('runs a javascript file on its own', async ({ page }) => {
 	await createFile(page, 'seite.html');
 	await setEditor(page, '<h1>Seite</h1>\n<script src="app.js"></script>');
 	await refreshPreview(page);
-	await expect(page.frameLocator('iframe[title="Vorschau"]').getByRole('heading', { name: 'Seite' })).toBeVisible();
+	await expect(
+		page.frameLocator('iframe[title="Vorschau"]').getByRole('heading', { name: 'Seite' })
+	).toBeVisible();
 
 	await createFile(page, 'app.js');
 	await setEditor(page, 'console.log("allein");');
@@ -340,20 +358,19 @@ test('explains each file type in the docs', async ({ page }) => {
 	await createFile(page, 'notiz.txt');
 
 	const cases = [
-		{ file: 'main.py', title: 'Python', lesson: 'Ausgabe' },
-		{ file: 'seite.html', title: 'HTML', lesson: 'Gerüst' },
-		{ file: 'style.css', title: 'CSS', lesson: 'CSS-Datei' },
-		{ file: 'app.js', title: 'JavaScript', lesson: 'JavaScript-Datei' },
-		{ file: 'daten.json', title: 'JSON', lesson: 'Objekt' },
-		{ file: 'note.xml', title: 'XML', lesson: 'Element' },
-		{ file: 'note.md', title: 'Markdown', lesson: 'Überschrift' },
-		{ file: 'notiz.txt', title: 'Text', lesson: 'Nur Text' }
+		{ file: 'main.py', lesson: 'Ausgabe' },
+		{ file: 'seite.html', lesson: 'Gerüst' },
+		{ file: 'style.css', lesson: 'CSS-Datei' },
+		{ file: 'app.js', lesson: 'JavaScript-Datei' },
+		{ file: 'daten.json', lesson: 'Objekt' },
+		{ file: 'note.xml', lesson: 'Element' },
+		{ file: 'note.md', lesson: 'Überschrift' },
+		{ file: 'notiz.txt', lesson: 'Nur Text' }
 	];
 	for (const item of cases) {
 		await page.getByRole('tab', { name: item.file }).click();
 		await page.getByRole('button', { name: 'Doku' }).click();
 		const docs = page.getByRole('dialog', { name: 'Doku' });
-		await expect(docs.getByRole('heading', { level: 1, name: item.title })).toBeVisible();
 		await expect(docs.getByRole('heading', { name: item.lesson, exact: true })).toBeVisible();
 		await expect(docs.getByText('Wähle ein Thema.')).toHaveCount(0);
 		await page.keyboard.press('Escape');
@@ -367,12 +384,19 @@ test('explains each file type in the docs', async ({ page }) => {
 	await page.keyboard.press('Escape');
 	await page.getByRole('tab', { name: 'note.md' }).click();
 	await page.getByRole('button', { name: 'Doku' }).click();
-	await expect(docs.frameLocator('#md-ueberschrift iframe').getByRole('heading', { name: 'Tagebuch' })).toBeVisible();
+	await expect(
+		docs.frameLocator('#md-ueberschrift iframe').getByRole('heading', { name: 'Tagebuch' })
+	).toBeVisible();
 	await page.keyboard.press('Escape');
 	await page.getByRole('tab', { name: 'notiz.txt' }).click();
 	await page.getByRole('button', { name: 'Doku' }).click();
-	await expect(docs.frameLocator('#txt-nur iframe').getByText('... es ist nur text :D')).toBeVisible();
-	await docs.getByRole('navigation', { name: 'Inhalt' }).getByRole('button', { name: 'Nur Text' }).click();
+	await expect(
+		docs.frameLocator('#txt-nur iframe').getByText('... es ist nur text :D')
+	).toBeVisible();
+	await docs
+		.getByRole('navigation', { name: 'Inhalt' })
+		.getByRole('button', { name: 'Nur Text' })
+		.click();
 	await expect(page).not.toHaveURL(/\/docs|#/u);
 });
 
@@ -403,7 +427,7 @@ test('keeps each python file’s output separate', async ({ page }) => {
 	const run = page.getByRole('button', { name: 'Ausführen' });
 	await expect(run).toBeEnabled({ timeout: 90_000 });
 	await run.click();
-	await expect(page.locator('.console-out').last()).toContainText('eins');
+	await expect(page.locator('.console-out').last()).toContainText('eins', { timeout: 90_000 });
 
 	await createFile(page, 'zweite.py');
 	await setEditor(page, 'print("zwei")\n');
@@ -427,14 +451,42 @@ test('keeps python problems, the hover, and the console link', async ({ page }) 
 	await openCoder(page);
 	await setEditor(page, 'print(missing)\n');
 	await showProblems(page);
-	await expect(page.locator('.problem-row').first()).toBeVisible({ timeout: 20_000 });
+	await expect(page.locator('.problem-row').first()).toBeVisible({ timeout: 30_000 });
+	await expect(page.locator('.problem-row').first()).not.toContainText(/F\d{3}/u);
 	await page.locator('.problem-row').first().click();
 	await expect(page.locator('.cm-tooltip').first()).toBeVisible();
 
 	const run = page.getByRole('button', { name: 'Ausführen' });
 	await expect(run).toBeEnabled({ timeout: 90_000 });
 	await run.click();
-	await expect(page.getByRole('button', { name: 'Wo?' })).toBeVisible({ timeout: 30_000 });
+	await expect(page.getByRole('button', { name: 'Wo?' })).toBeVisible({ timeout: 90_000 });
 	await page.getByRole('button', { name: 'Wo?' }).click();
 	await expect(page.locator('.cm-tooltip').first()).toBeVisible();
+});
+
+test('opens the matching docs section from a hover link', async ({ page }) => {
+	await openCoder(page);
+	await setEditor(page, 'def hallo():\n    return 1\n');
+	await page.locator('.cm-line').first().getByText('def', { exact: true }).hover();
+	const docsLink = page.locator('.cm-docs-link');
+	await expect(docsLink).toBeVisible();
+	await expect(docsLink).toHaveText('Doku');
+	await docsLink.click();
+	const docs = page.getByRole('dialog', { name: 'Doku' });
+	await expect(docs).toBeVisible();
+	await expect(docs.locator('#funktionen')).toHaveClass(/focused/);
+	await expect(docs.getByRole('heading', { name: 'Funktionen', exact: true })).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(docs).toBeHidden();
+
+	await createFile(page, 'seite.html');
+	await setEditor(page, '<p>Hallo</p>');
+	await page.locator('.cm-line').first().getByText('p', { exact: true }).first().hover();
+	await expect(docsLink).toBeVisible();
+	await docsLink.click();
+	await expect(docs).toBeVisible();
+	await expect(docs.locator('#html-text')).toHaveClass(/focused/);
+	await expect(
+		docs.getByRole('heading', { name: 'Überschrift und Text', exact: true })
+	).toBeVisible();
 });

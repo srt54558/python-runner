@@ -1,13 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
-	import { css } from '@codemirror/lang-css';
-	import { html } from '@codemirror/lang-html';
-	import { javascript } from '@codemirror/lang-javascript';
-	import { json } from '@codemirror/lang-json';
-	import { markdown } from '@codemirror/lang-markdown';
-	import { python } from '@codemirror/lang-python';
-	import { xml } from '@codemirror/lang-xml';
 	import { bracketMatching, indentOnInput, indentUnit } from '@codemirror/language';
 	import { lintGutter, setDiagnostics } from '@codemirror/lint';
 	import {
@@ -30,8 +23,13 @@
 		keymap,
 		lineNumbers
 	} from '@codemirror/view';
-	import { languageAssist } from '$lib/editor/assist';
+	import { applyDocChanges } from '$lib/editor/doc-changes';
 	import { diagnosticsForDocument, positionToOffset } from '$lib/editor/diagnostics';
+	import {
+		fallbackLanguageExtensions,
+		loadLanguageExtensions,
+		syncLanguageExtensions
+	} from '$lib/editor/language';
 	import { themeExtensions } from '$lib/editor/themes';
 	import type { RuffDiagnostic } from '$lib/runner/protocol';
 	import type { AppTheme } from '$lib/theme';
@@ -46,7 +44,8 @@
 		visible = true,
 		wrapLines = false,
 		onchange,
-		onhistory
+		onhistory,
+		onopendocs
 	}: {
 		fileId: string;
 		value: string;
@@ -57,7 +56,10 @@
 		wrapLines?: boolean;
 		onchange: (value: string) => void;
 		onhistory?: (state: { canUndo: boolean; canRedo: boolean }) => void;
+		onopendocs?: (lessonId: string) => void;
 	} = $props();
+
+	const docsOpener = { open: (lessonId: string) => onopendocs?.(lessonId) };
 
 	const externalChange = Annotation.define<boolean>();
 	const themeCompartment = new Compartment();
@@ -68,6 +70,7 @@
 	let view: EditorView | undefined;
 	let loadedFileId = '';
 	let wasVisible = false;
+	let emitted = '';
 
 	function reportHistory(state: EditorState) {
 		onhistory?.({
@@ -77,51 +80,19 @@
 	}
 
 	function emitDoc(next: string) {
+		emitted = next;
 		if (next !== value) onchange(next);
 	}
 
-	function languageExtensions(current: CodeLanguage) {
-		const labels: Record<CodeLanguage, string> = {
-			python: 'Python-Code',
-			html: 'HTML-Code',
-			javascript: 'JavaScript-Code',
-			css: 'CSS-Code',
-			json: 'JSON-Code',
-			xml: 'XML-Code',
-			markdown: 'Markdown',
-			text: 'Text'
-		};
-		const grammar =
-			current === 'html'
-				? [html({ selfClosingTags: true })]
-				: current === 'javascript'
-					? [javascript()]
-					: current === 'css'
-						? [css()]
-						: current === 'json'
-							? [json()]
-							: current === 'xml'
-								? [xml()]
-								: current === 'markdown'
-									? [markdown()]
-									: current === 'python'
-										? [python()]
-										: [];
-		return [
-			...grammar,
-			...languageAssist(current),
-			EditorView.contentAttributes.of({
-				spellcheck: 'false',
-				autocorrect: 'off',
-				autocapitalize: 'off',
-				autocomplete: 'off',
-				writingsuggestions: 'false',
-				'aria-label': labels[current]
-			})
-		];
+	function languageNow(current: CodeLanguage) {
+		return (
+			syncLanguageExtensions(current, (lessonId) => docsOpener.open(lessonId)) ??
+			fallbackLanguageExtensions(current, (lessonId) => docsOpener.open(lessonId))
+		);
 	}
 
 	function createState(doc: string) {
+		emitted = doc;
 		return EditorState.create({
 			doc,
 			extensions: [
@@ -135,7 +106,7 @@
 				indentOnInput(),
 				bracketMatching(),
 				closeBrackets(),
-				languageCompartment.of(languageExtensions(language)),
+				languageCompartment.of(languageNow(language)),
 				Prec.highest(
 					keymap.of([
 						{ key: 'Mod-Enter', run: () => true },
@@ -151,7 +122,11 @@
 						update.docChanged &&
 						!update.transactions.some((transaction) => transaction.annotation(externalChange))
 					) {
-						emitDoc(update.state.doc.toString());
+						const patches: { from: number; to: number; insert: string }[] = [];
+						update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+							patches.push({ from: fromA, to: toA, insert: inserted.toString() });
+						});
+						emitDoc(applyDocChanges(emitted, patches));
 					}
 					if (update.docChanged || update.transactions.length > 0) reportHistory(update.state);
 				})
@@ -221,21 +196,26 @@
 		if (id !== loadedFileId) {
 			loadedFileId = id;
 			if (view.state.doc.toString() !== next) view.setState(createState(next));
+			else emitted = next;
 			reportHistory(view.state);
 			return;
 		}
-		if (view.state.doc.toString() === next) return;
+		if (emitted === next || view.state.doc.toString() === next) {
+			emitted = next;
+			return;
+		}
 		view.dispatch({
 			changes: { from: 0, to: view.state.doc.length, insert: next },
 			annotations: externalChange.of(true)
 		});
+		emitted = next;
 	});
 
 	$effect(() => {
 		if (!ready || !view) return;
 		const source = value;
 		const mapped = diagnosticsForDocument(source, diagnostics);
-		if (view.state.doc.toString() !== source) return;
+		if (emitted !== source) return;
 		view.dispatch(setDiagnostics(view.state, mapped));
 	});
 
@@ -245,8 +225,28 @@
 	});
 
 	$effect(() => {
+		docsOpener.open = (lessonId) => onopendocs?.(lessonId);
+	});
+
+	$effect(() => {
 		if (!ready || !view) return;
-		view.dispatch({ effects: languageCompartment.reconfigure(languageExtensions(language)) });
+		const current = language;
+		const currentView = view;
+		let cancelled = false;
+		const immediate = syncLanguageExtensions(current, (lessonId) => docsOpener.open(lessonId));
+		if (immediate) {
+			currentView.dispatch({ effects: languageCompartment.reconfigure(immediate) });
+			return;
+		}
+		void loadLanguageExtensions(current, (lessonId) => docsOpener.open(lessonId)).then(
+			(extensions) => {
+				if (cancelled || view !== currentView) return;
+				currentView.dispatch({ effects: languageCompartment.reconfigure(extensions) });
+			}
+		);
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	$effect(() => {

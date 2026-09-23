@@ -64,9 +64,11 @@
 	let renaming = $state<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let restoreOpen = $state(false);
-	let pendingRestore = $state<{ name: string; snapshot: WorkspaceSnapshot; ignored: number } | null>(
-		null
-	);
+	let pendingRestore = $state<{
+		name: string;
+		snapshot: WorkspaceSnapshot;
+		ignored: number;
+	} | null>(null);
 
 	const rows = $derived(folderRows(snapshot.folders));
 	const visibleFiles = $derived(filesInFolder(snapshot, snapshot.selectedFolderId));
@@ -92,7 +94,7 @@
 		onchange(selectFolder(snapshot, folderId));
 	}
 
-	function addChildFolder(parentId: string) {
+	function addFolder(parentId: string | null) {
 		const next = createFolder(snapshot, parentId, 'Ordner');
 		const created = next.folders.find(
 			(folder) => !snapshot.folders.some((existing) => existing.id === folder.id)
@@ -103,7 +105,9 @@
 
 	function createNamed(name: string) {
 		const next = createFile(snapshot, snapshot.selectedFolderId, name);
-		const created = next.files.find((file) => !snapshot.files.some((existing) => existing.id === file.id));
+		const created = next.files.find(
+			(file) => !snapshot.files.some((existing) => existing.id === file.id)
+		);
 		if (created) pickFile(created.id);
 		onchange(next);
 	}
@@ -166,7 +170,9 @@
 	}
 
 	function downloadText(name: string, content: string) {
-		const blobUrl = URL.createObjectURL(new Blob([content], { type: 'text/x-python;charset=utf-8' }));
+		const blobUrl = URL.createObjectURL(
+			new Blob([content], { type: 'text/x-python;charset=utf-8' })
+		);
 		const link = document.createElement('a');
 		link.href = blobUrl;
 		link.download = name;
@@ -178,11 +184,13 @@
 		const selected = visibleFiles.find((file) => file.id === selectedFileId);
 		const files = selected ? [selected] : visibleFiles;
 		if (!files.length) {
-			onnotice?.('In diesem Ordner gibt es keine Datei zum Export.');
+			onnotice?.('In diesem Ordner gibt es keine Datei zum Exportieren.');
 			return;
 		}
 		for (const file of files) downloadText(file.name, file.content);
-		onnotice?.(files.length === 1 ? `${files[0].name} exportiert` : `${files.length} Dateien exportiert`);
+		onnotice?.(
+			files.length === 1 ? `${files[0].name} exportiert` : `${files.length} Dateien exportiert`
+		);
 	}
 
 	function limitNote(names: string[], limit: string): string {
@@ -224,7 +232,8 @@
 		const notes: string[] = [];
 		if (skippedArchive.length) notes.push(limitNote(skippedArchive, '20 MB'));
 		if (skippedFile.length) notes.push(limitNote(skippedFile, '1 MB'));
-		if (skippedType.length === 1) notes.push(`${skippedType[0]} hat ein Format, das nicht unterstützt wird.`);
+		if (skippedType.length === 1)
+			notes.push(`${skippedType[0]} hat ein Format, das nicht unterstützt wird.`);
 		else if (skippedType.length) {
 			notes.push(`${skippedType.length} Dateien haben ein Format, das nicht unterstützt wird.`);
 		}
@@ -276,7 +285,6 @@
 		pendingDelete = null;
 		deleteOpen = false;
 	}
-
 </script>
 
 <Dialog.Root
@@ -288,13 +296,12 @@
 	<Dialog.Content class="gap-0 overflow-hidden p-0 sm:max-w-3xl">
 		<div class="explorer-header">
 			<div>
-				<Dialog.Title>Files</Dialog.Title>
-				<Dialog.Description class="mt-1 text-xs">
+				<Dialog.Title>Dateien</Dialog.Title>
+				<Dialog.Description class={onsave ? 'mt-1 text-xs' : 'sr-only'}>
 					{#if onsave}
 						Ordner wählen, dann hier speichern.
 					{:else}
-						Ordner und Dateien bleiben in diesem Browser gespeichert. Import und Export gelten für den
-						gewählten Ordner.
+						Dateien und Ordner.
 					{/if}
 				</Dialog.Description>
 			</div>
@@ -307,19 +314,42 @@
 					multiple
 					onchange={(event) => void importChosen(event)}
 				/>
-				<Button variant="outline" size="sm" onclick={() => fileInput?.click()}><Upload /> Import</Button>
-				<Button variant="outline" size="sm" onclick={exportFiles} disabled={visibleFiles.length === 0}
-					><FileDown /> Export</Button
+				<Button variant="outline" size="sm" onclick={() => fileInput?.click()}
+					><Upload /> Importieren</Button
 				>
-				<Button variant="outline" size="sm" onclick={ondownload}><Download /> Download DB</Button>
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={exportFiles}
+					disabled={visibleFiles.length === 0}><FileDown /> Exportieren</Button
+				>
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={ondownload}
+					title="Datenbank herunterladen"
+					aria-label="Datenbank herunterladen"><Download /> Datenbank</Button
+				>
 				{#if onsave}
-					<Button size="sm" onclick={() => onsave(snapshot.selectedFolderId)}>Hier speichern</Button>
+					<Button size="sm" onclick={() => onsave(snapshot.selectedFolderId)}>Hier speichern</Button
+					>
 				{/if}
 			</div>
 		</div>
 		<div class="explorer-panes">
 			<section class="pane" aria-label="Ordner">
-				<p class="pane-label">Ordner</p>
+				<div class="pane-label folders-label">
+					<span>Ordner</span>
+					<button
+						type="button"
+						class="add-btn"
+						aria-label="Neuer Ordner"
+						title="Neuer Ordner"
+						onclick={() => addFolder(null)}
+					>
+						<Plus />
+					</button>
+				</div>
 				<ScrollArea class="pane-scroll">
 					<ul>
 						{#each rows as row (row.folder.id)}
@@ -350,7 +380,7 @@
 										class="icon-btn"
 										aria-label={`In ${row.folder.name} einen Ordner anlegen`}
 										title="Neuer Ordner"
-										onclick={() => addChildFolder(row.folder.id)}
+										onclick={() => addFolder(row.folder.id)}
 									>
 										<Plus />
 									</button>
@@ -366,7 +396,9 @@
 										type="button"
 										class="icon-btn"
 										aria-label={`${row.folder.name} löschen`}
-										title={row.folder.id === ROOT_FOLDER_ID ? 'Der Hauptordner bleibt erhalten' : 'Ordner löschen'}
+										title={row.folder.id === ROOT_FOLDER_ID
+											? 'Der Hauptordner bleibt erhalten'
+											: 'Ordner löschen'}
 										disabled={row.folder.id === ROOT_FOLDER_ID}
 										onclick={() => askDeleteFolder(row.folder)}
 									>
@@ -470,7 +502,9 @@
 		</AlertDialog.Header>
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel>Abbrechen</AlertDialog.Cancel>
-			<AlertDialog.Action variant="destructive" onclick={confirmRestore}>Ersetzen</AlertDialog.Action>
+			<AlertDialog.Action variant="destructive" onclick={confirmRestore}
+				>Ersetzen</AlertDialog.Action
+			>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
@@ -478,7 +512,11 @@
 <AlertDialog.Root bind:open={deleteOpen}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>{pendingDelete?.kind === 'folder' ? 'Ordner löschen?' : 'Datei löschen?'}</AlertDialog.Title>
+			<AlertDialog.Title
+				>{pendingDelete?.kind === 'folder'
+					? 'Ordner löschen?'
+					: 'Datei löschen?'}</AlertDialog.Title
+			>
 			<AlertDialog.Description>
 				{#if pendingDelete?.kind === 'folder'}
 					„{pendingDelete.name}“ und alles darin wird aus dem Workspace entfernt.
@@ -499,6 +537,7 @@
 <style>
 	.explorer-header,
 	.files-label,
+	.folders-label,
 	.header-actions,
 	.file-actions,
 	.row {
@@ -564,6 +603,10 @@
 		font-weight: 650;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
+	}
+	.folders-label {
+		justify-content: space-between;
+		gap: 0.5rem;
 	}
 	.files-label {
 		justify-content: space-between;
