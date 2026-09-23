@@ -51,7 +51,13 @@
 	import { resolveProjectPath } from '$lib/editor/links';
 	import { consoleSegments, matchProblem } from '$lib/runner/console-links';
 	import { clipBlocks, clipText } from '$lib/runner/limits';
-	import { disposePython, runPython, stopPython, watchPythonHost } from '$lib/runner/python-host';
+	import {
+		disposePython,
+		holdPython,
+		runPython,
+		stopPython,
+		watchPythonHost
+	} from '$lib/runner/python-host';
 	import { canShareCode, createShareUrl, decodeCode, IMPORT_PARAM } from '$lib/runner/share';
 	import { WORKSPACE_ARCHIVE_NAME, workspaceExport } from '$lib/workspace/archive';
 	import { loadWorkspace, saveWorkspace, writeWorkspaceBackup } from '$lib/workspace/database';
@@ -796,6 +802,14 @@
 	});
 
 	$effect(() => {
+		if (!hydrated || !workspace.welcomed) return;
+		const pythonOpen =
+			isPythonFile(editorName) || openFiles.some((file) => isPythonFile(file.name));
+		holdPython(pythonOpen);
+		return () => holdPython(false);
+	});
+
+	$effect(() => {
 		if (!hydrated) return;
 		const source = editorCode;
 		const fileId = editorFileId;
@@ -1334,9 +1348,18 @@
 	>
 		<Dialog.Content
 			class="docs-popup top-[max(1rem,8vh)] right-[max(1rem,8vw)] bottom-[max(1rem,8vh)] left-[max(1rem,8vw)] h-auto max-h-none w-auto max-w-none translate-x-0 translate-y-0"
+			showCloseButton={false}
 		>
 			<Dialog.Title class="sr-only">Doku</Dialog.Title>
 			<Dialog.Description class="sr-only">Erklärungen zu den Dateitypen.</Dialog.Description>
+			<button
+				type="button"
+				class="docs-close"
+				aria-label="Schließen"
+				onclick={() => (docsOpen = false)}
+			>
+				<X />
+			</button>
 			{#if docsOpen}
 				{#await import('$lib/docs/docs-browser.svelte') then { default: DocsBrowser }}
 					<DocsBrowser fill language={docsLanguage} focusId={docsFocusId} />
@@ -2260,6 +2283,32 @@
 		padding: 0 !important;
 		overflow: hidden;
 		animation: none !important;
+	}
+	:global(.docs-popup .docs-close) {
+		position: absolute;
+		top: 0.7rem;
+		right: 0.7rem;
+		z-index: 40;
+		display: grid;
+		width: 2.25rem;
+		height: 2.25rem;
+		place-items: center;
+		border: 1px solid var(--border);
+		border-radius: 0.4rem;
+		background: var(--background);
+		color: var(--foreground);
+		cursor: pointer;
+	}
+	:global(.docs-popup .docs-close:hover) {
+		background: color-mix(in oklch, var(--foreground) 6%, var(--background));
+	}
+	:global(.docs-popup .docs-close:focus-visible) {
+		outline: 2px solid var(--ring);
+		outline-offset: 1px;
+	}
+	:global(.docs-popup .docs-close svg) {
+		width: 1rem;
+		height: 1rem;
 	}
 	:global(.docs-popup .browser) {
 		flex: 1 1 auto;

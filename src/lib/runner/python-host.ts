@@ -40,6 +40,7 @@ let generation = 0;
 let status: PythonHostStatus = 'idle';
 let version: string | undefined;
 let broken = false;
+let held = false;
 let seq = 0;
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 const listeners = new Set<Listener>();
@@ -64,7 +65,7 @@ function clearIdle() {
 
 function armIdle() {
 	clearIdle();
-	if (status !== 'ready' || active || queue.length) return;
+	if (held || status !== 'ready' || active || queue.length) return;
 	idleTimer = setTimeout(() => {
 		if (active || queue.length) return;
 		teardown();
@@ -212,6 +213,25 @@ function ensureWorker() {
 	};
 }
 
+export function warmPython() {
+	if (worker) return;
+	if (broken) {
+		broken = false;
+		status = 'idle';
+	}
+	ensureWorker();
+}
+
+export function holdPython(hold: boolean) {
+	held = hold;
+	if (hold) {
+		clearIdle();
+		warmPython();
+		return;
+	}
+	armIdle();
+}
+
 export function runPython(input: PythonRunInput): Promise<PythonRunResult> {
 	if (broken && !worker) {
 		broken = false;
@@ -243,11 +263,13 @@ export function stopPython(message = 'Ausführung gestoppt.') {
 			error: message
 		});
 	}
+	if (held && !broken) warmPython();
 }
 
 export function disposePython() {
 	listeners.clear();
 	broken = false;
+	held = false;
 	stopPython();
 	version = undefined;
 	status = 'idle';
